@@ -80,7 +80,6 @@ fn analyze_method(
     let mut worklist = VecDeque::from([entry]);
     let mut visits = HashMap::new();
     let mut total_work_items = 0_usize;
-    let mut observations = BTreeMap::new();
 
     while let Some(block_id) = worklist.pop_front() {
         total_work_items += 1;
@@ -99,7 +98,6 @@ fn analyze_method(
         let block = &graph.blocks[block_id];
         let mut frame = incoming[&block_id].clone();
         for instruction in &method.instructions[block.instruction_range.clone()] {
-            let before = frame.clone();
             transfer(method, instruction, &mut frame, &mut diagnostics);
             if frame.stack.len() > usize::from(method.max_stack) {
                 diagnostics.push(Diagnostic::new(
@@ -114,15 +112,6 @@ fn analyze_method(
                     ),
                 ));
             }
-            observations.insert(
-                instruction.offset,
-                InstructionInference::new(
-                    instruction.offset,
-                    before.locals,
-                    before.stack,
-                    frame.stack.clone(),
-                ),
-            );
         }
 
         for edge in &block.successors {
@@ -144,6 +133,7 @@ fn analyze_method(
         }
     }
 
+    let observations = observe_final_frames(method, &graph, &incoming);
     let local_types = collect_local_types(&incoming, &observations, entry_frame.locals, method);
     let instructions = observations.into_values().collect();
     (
@@ -157,6 +147,38 @@ fn analyze_method(
         ),
         diagnostics,
     )
+}
+
+fn observe_final_frames(
+    method: &MethodIr,
+    graph: &crate::cfg::ControlFlowGraph,
+    incoming: &HashMap<crate::cfg::BlockId, Frame>,
+) -> BTreeMap<u16, InstructionInference> {
+    let mut observations = BTreeMap::new();
+    let mut ignored_diagnostics = Vec::new();
+
+    for (block_id, block) in graph.blocks.iter() {
+        let Some(entry_frame) = incoming.get(&block_id) else {
+            continue;
+        };
+        let mut frame = entry_frame.clone();
+
+        for instruction in &method.instructions[block.instruction_range.clone()] {
+            let before = frame.clone();
+            transfer(method, instruction, &mut frame, &mut ignored_diagnostics);
+            observations.insert(
+                instruction.offset,
+                InstructionInference::new(
+                    instruction.offset,
+                    before.locals,
+                    before.stack,
+                    frame.stack.clone(),
+                ),
+            );
+        }
+    }
+
+    observations
 }
 
 fn merge_frame(

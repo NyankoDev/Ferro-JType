@@ -17,6 +17,18 @@ impl ClassName {
         Self("java/lang/Object".to_owned())
     }
 
+    pub(crate) fn java_lang_class() -> Self {
+        Self("java/lang/Class".to_owned())
+    }
+
+    pub(crate) fn java_lang_invoke_method_handle() -> Self {
+        Self("java/lang/invoke/MethodHandle".to_owned())
+    }
+
+    pub(crate) fn java_lang_invoke_method_type() -> Self {
+        Self("java/lang/invoke/MethodType".to_owned())
+    }
+
     pub(crate) fn java_lang_throwable() -> Self {
         Self("java/lang/Throwable".to_owned())
     }

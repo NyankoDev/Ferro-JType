@@ -52,8 +52,13 @@ impl Frame {
 
     pub(crate) fn set_local(&mut self, local: u16, value: InferredType) {
         let local = usize::from(local);
-        self.locals.resize(local + 1, InferredType::Bottom);
+        let width = usize::from(matches!(value, InferredType::Long | InferredType::Double)) + 1;
+        self.locals
+            .resize(self.locals.len().max(local + width), InferredType::Bottom);
         self.locals[local] = value;
+        if width == 2 {
+            self.locals[local + 1] = InferredType::Bottom;
+        }
     }
 
     pub(crate) fn pop(&mut self) -> Option<InferredType> {

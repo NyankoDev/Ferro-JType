@@ -75,6 +75,8 @@ pub(crate) enum ConstantKind {
     Double,
     String,
     Type,
+    MethodHandle,
+    MethodType,
     Unresolved,
 }
 

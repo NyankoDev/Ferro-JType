@@ -36,13 +36,7 @@ pub(crate) fn transfer(
             instruction,
             diagnostics,
         ),
-        0x32 => array_load(
-            frame,
-            InferredType::Reference(ReferenceType::Unknown),
-            method,
-            instruction,
-            diagnostics,
-        ),
+        0x32 => reference_array_load(frame, method, instruction, diagnostics),
         0x36 | 0x3b..=0x3e => store_local(instruction, frame, 0x36, 0x3b, method, diagnostics),
         0x37 | 0x3f..=0x42 => store_local(instruction, frame, 0x37, 0x3f, method, diagnostics),
         0x38 | 0x43..=0x46 => store_local(instruction, frame, 0x38, 0x43, method, diagnostics),
@@ -170,6 +164,36 @@ fn array_load(
     discard(frame, method, instruction, diagnostics);
     discard(frame, method, instruction, diagnostics);
     frame.push(result);
+}
+
+fn reference_array_load(
+    frame: &mut Frame,
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    discard(frame, method, instruction, diagnostics);
+    let array = pop(frame, method, instruction, diagnostics);
+    frame.push(reference_array_element_type(&array));
+}
+
+fn reference_array_element_type(array: &InferredType) -> InferredType {
+    let InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
+        dimensions,
+        element,
+    })) = array
+    else {
+        return InferredType::Reference(ReferenceType::Unknown);
+    };
+
+    if *dimensions == 1 {
+        return inferred_from_descriptor(element);
+    }
+
+    InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
+        dimensions: dimensions - 1,
+        element: element.clone(),
+    }))
 }
 
 fn array_store(
@@ -497,8 +521,16 @@ fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
         InstructionOperandIr::Constant(ConstantKind::String) => {
             InferredType::Reference(ReferenceType::Exact(ClassName::java_lang_string()))
         }
-        InstructionOperandIr::Constant(ConstantKind::Type)
-        | InstructionOperandIr::Constant(ConstantKind::Unresolved) => {
+        InstructionOperandIr::Constant(ConstantKind::Type) => {
+            InferredType::Reference(ReferenceType::Exact(ClassName::java_lang_class()))
+        }
+        InstructionOperandIr::Constant(ConstantKind::MethodHandle) => InferredType::Reference(
+            ReferenceType::Exact(ClassName::java_lang_invoke_method_handle()),
+        ),
+        InstructionOperandIr::Constant(ConstantKind::MethodType) => InferredType::Reference(
+            ReferenceType::Exact(ClassName::java_lang_invoke_method_type()),
+        ),
+        InstructionOperandIr::Constant(ConstantKind::Unresolved) => {
             InferredType::Reference(ReferenceType::Unknown)
         }
         _ => InferredType::Reference(ReferenceType::Unknown),

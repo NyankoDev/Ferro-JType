@@ -251,6 +251,8 @@ fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind 
         Some(ConstantRef::Double(_)) => ConstantKind::Double,
         Some(ConstantRef::String { .. }) => ConstantKind::String,
         Some(ConstantRef::Class { .. }) => ConstantKind::Type,
+        Some(ConstantRef::MethodHandle { .. }) => ConstantKind::MethodHandle,
+        Some(ConstantRef::MethodType { .. }) => ConstantKind::MethodType,
         Some(
             ConstantRef::Unusable
             | ConstantRef::Utf8(_)
@@ -258,8 +260,6 @@ fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind 
             | ConstantRef::MethodReference { .. }
             | ConstantRef::InterfaceMethodReference { .. }
             | ConstantRef::NameAndType { .. }
-            | ConstantRef::MethodHandle { .. }
-            | ConstantRef::MethodType { .. }
             | ConstantRef::Dynamic { .. }
             | ConstantRef::InvokeDynamic { .. }
             | ConstantRef::Module { .. }
