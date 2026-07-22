@@ -3,18 +3,23 @@ use std::collections::{HashMap, VecDeque};
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::{
     ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
-    Error, InferenceConfig, InferredType, MethodDescriptor, MethodInference, MethodSummaries,
-    MethodSummaryResolver,
+    Error, FieldSummaries, InferenceConfig, InferredType, MethodDescriptor, MethodInference,
+    MethodSummaries, MethodSummaryResolver,
 };
 
 use super::engine::analyze_method;
+use super::fields::{
+    StaticFieldResolver, local_field_readers, update_local_static_field_summaries,
+};
 
 pub(crate) fn analyze_class(
     class: &ClassIr,
     config: &InferenceConfig,
 ) -> Result<ClassInference, Error> {
     let callers = local_summary_callers(class);
+    let field_readers = local_field_readers(class);
     let mut summaries = MethodSummaries::new();
+    let mut field_summaries = FieldSummaries::new();
     let mut analyses = (0..class.methods.len())
         .map(|_| None)
         .collect::<Vec<Option<(MethodInference, Vec<Diagnostic>)>>>();
@@ -34,19 +39,28 @@ pub(crate) fn analyze_class(
         }
 
         let (inference, method_diagnostics) = {
-            let resolver = ClassSummaryResolver {
+            let method_resolver = ClassSummaryResolver {
                 external: config.method_summaries(),
                 local: &summaries,
             };
+            let field_resolver =
+                StaticFieldResolver::new(config.field_summaries(), &field_summaries);
             analyze_method(
                 &class.name,
                 &class.methods[method_index],
                 config,
-                Some(&resolver),
-                config.field_summaries(),
+                Some(&method_resolver),
+                Some(&field_resolver),
             )
         };
         let summary_changed = update_local_method_summary(&mut summaries, &class.name, &inference);
+        let changed_fields = update_local_static_field_summaries(
+            class,
+            &class.methods[method_index],
+            &inference,
+            &mut field_summaries,
+            config.type_hierarchy(),
+        );
         analyses[method_index] = Some((inference, method_diagnostics));
 
         if summary_changed {
@@ -54,6 +68,17 @@ pub(crate) fn analyze_class(
                 if !scheduled[*caller] {
                     scheduled[*caller] = true;
                     worklist.push_back(*caller);
+                }
+            }
+        }
+        for field in changed_fields {
+            let Some(readers) = field_readers.get(&field) else {
+                continue;
+            };
+            for reader in readers {
+                if !scheduled[*reader] {
+                    scheduled[*reader] = true;
+                    worklist.push_back(*reader);
                 }
             }
         }

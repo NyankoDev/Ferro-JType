@@ -1,6 +1,6 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
-use crate::summary::{FieldSummaryResolver, MethodSummaryResolver};
+use crate::summary::{FieldSummaryResolver, MethodSummaryResolver, value_type_matches_descriptor};
 use crate::{
     ClassName, Diagnostic, InferredType, MethodDescriptor, ReferenceType, ReturnType,
     TypeDescriptor,
@@ -395,40 +395,7 @@ fn resolve_method_summary(
 fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &InferredType) -> bool {
     match descriptor.return_type() {
         ReturnType::Void => false,
-        ReturnType::Type(descriptor) => {
-            summary_is_compatible_with_descriptor(descriptor, return_type)
-        }
-    }
-}
-
-fn summary_is_compatible_with_descriptor(
-    descriptor: &TypeDescriptor,
-    value_type: &InferredType,
-) -> bool {
-    match descriptor {
-        TypeDescriptor::Primitive(primitive) => matches!(
-            (primitive, value_type),
-            (
-                crate::PrimitiveType::Boolean
-                    | crate::PrimitiveType::Byte
-                    | crate::PrimitiveType::Char
-                    | crate::PrimitiveType::Short
-                    | crate::PrimitiveType::Int,
-                InferredType::Int
-            ) | (crate::PrimitiveType::Float, InferredType::Float)
-                | (crate::PrimitiveType::Long, InferredType::Long)
-                | (crate::PrimitiveType::Double, InferredType::Double)
-        ),
-        TypeDescriptor::Reference(_) => matches!(
-            value_type,
-            InferredType::Reference(
-                ReferenceType::Exact(_) | ReferenceType::Array(_) | ReferenceType::Null
-            )
-        ),
-        TypeDescriptor::Array { .. } => matches!(
-            value_type,
-            InferredType::Reference(ReferenceType::Array(_) | ReferenceType::Null)
-        ),
+        ReturnType::Type(descriptor) => value_type_matches_descriptor(descriptor, return_type),
     }
 }
 
@@ -462,7 +429,7 @@ fn field_type(
         .map(|descriptor| {
             field_summaries
                 .and_then(|resolver| resolver.value_type(owner, name, &descriptor))
-                .filter(|value_type| summary_is_compatible_with_descriptor(&descriptor, value_type))
+                .filter(|value_type| value_type_matches_descriptor(&descriptor, value_type))
                 .unwrap_or_else(|| inferred_from_descriptor(&descriptor))
         })
         .unwrap_or_else(|_| {

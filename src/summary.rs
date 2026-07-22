@@ -190,3 +190,36 @@ impl FieldSummaryResolver for FieldSummaries {
         self.values.get(owner)?.get(name)?.get(descriptor).cloned()
     }
 }
+
+pub(crate) fn value_type_matches_descriptor(
+    descriptor: &TypeDescriptor,
+    value_type: &InferredType,
+) -> bool {
+    match descriptor {
+        TypeDescriptor::Primitive(primitive) => matches!(
+            (primitive, value_type),
+            (
+                crate::PrimitiveType::Boolean
+                    | crate::PrimitiveType::Byte
+                    | crate::PrimitiveType::Char
+                    | crate::PrimitiveType::Short
+                    | crate::PrimitiveType::Int,
+                InferredType::Int
+            ) | (crate::PrimitiveType::Float, InferredType::Float)
+                | (crate::PrimitiveType::Long, InferredType::Long)
+                | (crate::PrimitiveType::Double, InferredType::Double)
+        ),
+        TypeDescriptor::Reference(_) => matches!(
+            value_type,
+            InferredType::Reference(
+                crate::ReferenceType::Exact(_)
+                    | crate::ReferenceType::Array(_)
+                    | crate::ReferenceType::Null
+            )
+        ),
+        TypeDescriptor::Array { .. } => matches!(
+            value_type,
+            InferredType::Reference(crate::ReferenceType::Array(_) | crate::ReferenceType::Null)
+        ),
+    }
+}
