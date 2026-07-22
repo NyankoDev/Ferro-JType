@@ -534,7 +534,7 @@ fn reference_descriptor(name: &str) -> Option<TypeDescriptor> {
 }
 
 fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
-    let value = match instruction.operand {
+    let value = match &instruction.operand {
         InstructionOperandIr::Constant(ConstantKind::Integer) => InferredType::Int,
         InstructionOperandIr::Constant(ConstantKind::Float) => InferredType::Float,
         InstructionOperandIr::Constant(ConstantKind::Long) => InferredType::Long,
@@ -551,6 +551,9 @@ fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
         InstructionOperandIr::Constant(ConstantKind::MethodType) => InferredType::Reference(
             ReferenceType::Exact(ClassName::java_lang_invoke_method_type()),
         ),
+        InstructionOperandIr::Constant(ConstantKind::Dynamic(descriptor)) => {
+            inferred_from_descriptor(descriptor)
+        }
         InstructionOperandIr::Constant(ConstantKind::Unresolved) => {
             InferredType::Reference(ReferenceType::Unknown)
         }

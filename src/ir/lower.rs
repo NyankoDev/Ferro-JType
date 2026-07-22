@@ -10,7 +10,9 @@ use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
     MethodIr, strip_stack_map_tables,
 };
-use crate::{ClassName, DescriptorError, Error, GenericSignature, MethodDescriptor};
+use crate::{
+    ClassName, DescriptorError, Error, GenericSignature, MethodDescriptor, TypeDescriptor,
+};
 
 pub(crate) fn parse_and_lower(bytes: &[u8]) -> Result<ClassIr, Error> {
     let bytes = strip_stack_map_tables(bytes)?;
@@ -316,6 +318,12 @@ fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind 
         Some(ConstantRef::Class { .. }) => ConstantKind::Type,
         Some(ConstantRef::MethodHandle { .. }) => ConstantKind::MethodHandle,
         Some(ConstantRef::MethodType { .. }) => ConstantKind::MethodType,
+        Some(ConstantRef::Dynamic { name_and_type, .. }) => {
+            resolve_name_and_type(class, name_and_type)
+                .and_then(|(_, descriptor)| TypeDescriptor::parse(&descriptor).ok())
+                .map(ConstantKind::Dynamic)
+                .unwrap_or(ConstantKind::Unresolved)
+        }
         Some(
             ConstantRef::Unusable
             | ConstantRef::Utf8(_)
@@ -323,7 +331,6 @@ fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind 
             | ConstantRef::MethodReference { .. }
             | ConstantRef::InterfaceMethodReference { .. }
             | ConstantRef::NameAndType { .. }
-            | ConstantRef::Dynamic { .. }
             | ConstantRef::InvokeDynamic { .. }
             | ConstantRef::Module { .. }
             | ConstantRef::Package { .. },

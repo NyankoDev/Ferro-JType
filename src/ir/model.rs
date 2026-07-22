@@ -1,4 +1,4 @@
-use crate::{ClassName, GenericSignature, MethodDescriptor};
+use crate::{ClassName, GenericSignature, MethodDescriptor, TypeDescriptor};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
@@ -69,7 +69,7 @@ pub(crate) enum InstructionOperandIr {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConstantKind {
     Integer,
     Float,
@@ -79,6 +79,7 @@ pub(crate) enum ConstantKind {
     Type,
     MethodHandle,
     MethodType,
+    Dynamic(TypeDescriptor),
     Unresolved,
 }
 
