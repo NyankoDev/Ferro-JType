@@ -81,6 +81,9 @@ impl InferenceConfig {
     }
 
     /// Returns the maximum number of work-queue entries processed per method.
+    ///
+    /// The same budget also bounds automatic class-local method-summary
+    /// revisits after every method has received its initial analysis pass.
     #[must_use]
     pub const fn max_work_items(&self) -> usize {
         self.max_work_items
@@ -122,7 +125,8 @@ impl InferenceConfig {
 
     /// Sets the per-method work-queue processing limit.
     ///
-    /// A value of zero is rejected by [`Inferer::new`].
+    /// The same value bounds automatic class-local method-summary revisits. A
+    /// value of zero is rejected by [`Inferer::new`].
     #[must_use]
     pub const fn with_max_work_items(mut self, max_work_items: usize) -> Self {
         self.max_work_items = max_work_items;
@@ -132,7 +136,8 @@ impl InferenceConfig {
     /// Disables work-item and per-block limits for trusted, difficult inputs.
     ///
     /// This is useful for deeply flattened control flow when completion is more
-    /// important than a fixed resource budget. It never executes Java code.
+    /// important than a fixed resource budget, including class-local method
+    /// summary convergence. It never executes Java code.
     #[must_use]
     pub const fn with_unbounded_analysis(mut self) -> Self {
         self.unbounded_analysis = true;

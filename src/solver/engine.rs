@@ -1,59 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::cfg::{EdgeKind, build_cfg};
-use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
+use crate::ir::{InstructionIr, InstructionOperandIr, MethodIr};
 use crate::result::MethodHeader;
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::types::join_local_types;
 use crate::{
-    ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
-    Error, InferenceConfig, InferredType, InstructionInference, MethodInference, ReferenceType,
+    ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, InferenceConfig,
+    InferredType, InstructionInference, MethodInference, MethodSummaryResolver, ReferenceType,
     ReturnType, TypeDescriptor,
 };
 
-pub(crate) fn analyze_class(
-    class: &ClassIr,
-    config: &InferenceConfig,
-) -> Result<ClassInference, Error> {
-    let mut diagnostics = class.diagnostics.clone();
-    let methods = class
-        .methods
-        .iter()
-        .map(|method| {
-            let (inference, method_diagnostics) = analyze_method(&class.name, method, config);
-            diagnostics.extend(method_diagnostics);
-            inference
-        })
-        .collect();
-
-    if config.strict()
-        && let Some(diagnostic) = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.severity() != DiagnosticSeverity::Note)
-    {
-        return Err(Error::StrictAnalysis {
-            message: diagnostic.message().to_owned(),
-        });
-    }
-
-    Ok(ClassInference::new(
-        class.name.clone(),
-        class.generic_signature.clone(),
-        methods,
-        diagnostics,
-    ))
-}
-
-fn analyze_method(
+pub(super) fn analyze_method(
     owner: &crate::ClassName,
     method: &MethodIr,
     config: &InferenceConfig,
+    method_summaries: Option<&dyn MethodSummaryResolver>,
 ) -> (MethodInference, Vec<Diagnostic>) {
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
     let hierarchy = config.type_hierarchy();
-    let method_summaries = config.method_summaries();
     let mut diagnostics = cfg_result.diagnostics;
     let entry_frame = Frame::entry(
         owner,

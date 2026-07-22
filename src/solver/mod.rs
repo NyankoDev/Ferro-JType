@@ -1,5 +1,6 @@
+mod class;
 mod engine;
 mod frame;
 mod transfer;
 
-pub(crate) use engine::analyze_class;
+pub(crate) use class::analyze_class;

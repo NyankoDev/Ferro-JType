@@ -158,6 +158,11 @@ impl MethodInference {
         self.inferred_return_type.as_ref()
     }
 
+    pub(crate) fn mark_analysis_incomplete(&mut self) {
+        self.analysis_complete = false;
+        self.inferred_return_type = None;
+    }
+
     /// Returns inferred local-variable types indexed by JVM local slot.
     #[must_use]
     pub fn local_types(&self) -> &[InferredType] {

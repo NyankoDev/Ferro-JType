@@ -70,6 +70,33 @@ impl MethodSummaries {
     pub fn is_empty(&self) -> bool {
         self.returns.is_empty()
     }
+
+    pub(crate) fn remove_return_type(
+        &mut self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+    ) -> Option<InferredType> {
+        let removed = self
+            .returns
+            .get_mut(owner)?
+            .get_mut(name)?
+            .remove(descriptor);
+
+        if self
+            .returns
+            .get(owner)
+            .and_then(|methods| methods.get(name))
+            .is_some_and(HashMap::is_empty)
+        {
+            self.returns.get_mut(owner)?.remove(name);
+        }
+        if self.returns.get(owner).is_some_and(HashMap::is_empty) {
+            self.returns.remove(owner);
+        }
+
+        removed
+    }
 }
 
 impl MethodSummaryResolver for MethodSummaries {
