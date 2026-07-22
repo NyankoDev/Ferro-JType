@@ -93,19 +93,21 @@ pub(super) fn analyze_method(
                 method_summaries,
                 field_summaries,
             );
-            let mut propagation = Propagation {
-                method,
-                diagnostics: &mut diagnostics,
-                worklist: &mut worklist,
-                hierarchy,
-            };
-            propagate_exception_edges(
-                &block.exception_successors,
-                instruction.offset,
-                before,
-                &mut incoming,
-                &mut propagation,
-            );
+            if instruction_may_throw(instruction.opcode) {
+                let mut propagation = Propagation {
+                    method,
+                    diagnostics: &mut diagnostics,
+                    worklist: &mut worklist,
+                    hierarchy,
+                };
+                propagate_exception_edges(
+                    &block.exception_successors,
+                    instruction.offset,
+                    before,
+                    &mut incoming,
+                    &mut propagation,
+                );
+            }
             if frame.stack.len() > usize::from(method.max_stack) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticSeverity::Warning,
@@ -197,6 +199,22 @@ pub(super) fn analyze_method(
             instructions,
         ),
         diagnostics,
+    )
+}
+
+const fn instruction_may_throw(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        0x12..=0x14
+            | 0x2e..=0x35
+            | 0x4f..=0x56
+            | 0x6c
+            | 0x6d
+            | 0x70
+            | 0x71
+            | 0xb2..=0xba
+            | 0xbb..=0xc3
+            | 0xc5
     )
 }
 
@@ -409,10 +427,12 @@ fn collect_inferred_return_type(
         if !return_opcode_matches_descriptor(instruction.opcode, declared_return_type) {
             return None;
         }
-        let return_type = observations
-            .get(&instruction.offset)?
-            .stack_before()
-            .last()?;
+        let Some(return_type) = observations
+            .get(&instruction.offset)
+            .and_then(|instruction| instruction.stack_before().last())
+        else {
+            continue;
+        };
         if !return_value_matches_opcode(instruction.opcode, return_type) {
             return None;
         }
@@ -435,12 +455,13 @@ fn collect_returned_parameter_index(
         .iter()
         .filter(|instruction| matches!(instruction.opcode, 0xac..=0xb0))
     {
-        let ValueOrigin::Entry(slot) =
-            return_origins.get(&instruction.offset).copied().flatten()?
-        else {
+        let Some(origin) = return_origins.get(&instruction.offset) else {
+            continue;
+        };
+        let Some(ValueOrigin::Entry(slot)) = origin else {
             return None;
         };
-        let index = parameter_index_for_local_slot(method, slot)?;
+        let index = parameter_index_for_local_slot(method, *slot)?;
         if let Some(previous) = parameter_index
             && previous != index
         {
