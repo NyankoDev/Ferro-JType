@@ -575,7 +575,7 @@ fn cast_reference(
     method: &MethodIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    discard(frame, method, instruction, diagnostics);
+    let mut value = pop_value(frame, method, instruction, diagnostics);
     let reference = type_name(instruction)
         .and_then(reference_descriptor)
         .map(|descriptor| match descriptor {
@@ -584,7 +584,10 @@ fn cast_reference(
             TypeDescriptor::Primitive(_) => ReferenceType::Unknown,
         })
         .unwrap_or(ReferenceType::Unknown);
-    frame.push(InferredType::Reference(reference));
+    if !matches!(value.value, InferredType::Reference(ReferenceType::Null)) {
+        value.value = InferredType::Reference(reference);
+    }
+    frame.push_value(value);
 }
 
 fn instance_of(
