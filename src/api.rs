@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::ir::parse_and_lower;
 use crate::solver::analyze_class;
-use crate::{ClassInference, Error, TypeHierarchy};
+use crate::{ClassInference, Error, MethodSummaryResolver, TypeHierarchy};
 
 /// Configuration for a bounded class-file type-inference run.
 ///
@@ -16,6 +16,7 @@ pub struct InferenceConfig {
     max_work_items: usize,
     unbounded_analysis: bool,
     hierarchy: Option<Arc<dyn TypeHierarchy>>,
+    method_summaries: Option<Arc<dyn MethodSummaryResolver>>,
 }
 
 impl std::fmt::Debug for InferenceConfig {
@@ -27,6 +28,7 @@ impl std::fmt::Debug for InferenceConfig {
             .field("max_work_items", &self.max_work_items)
             .field("unbounded_analysis", &self.unbounded_analysis)
             .field("has_type_hierarchy", &self.hierarchy.is_some())
+            .field("has_method_summaries", &self.method_summaries.is_some())
             .finish()
     }
 }
@@ -38,6 +40,11 @@ impl PartialEq for InferenceConfig {
             && self.max_work_items == other.max_work_items
             && self.unbounded_analysis == other.unbounded_analysis
             && match (&self.hierarchy, &other.hierarchy) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+            && match (&self.method_summaries, &other.method_summaries) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 (None, None) => true,
                 _ => false,
@@ -55,6 +62,7 @@ impl Default for InferenceConfig {
             max_work_items: 50_000,
             unbounded_analysis: false,
             hierarchy: None,
+            method_summaries: None,
         }
     }
 }
@@ -88,6 +96,12 @@ impl InferenceConfig {
     #[must_use]
     pub const fn has_type_hierarchy(&self) -> bool {
         self.hierarchy.is_some()
+    }
+
+    /// Returns whether caller-provided method-return summaries are enabled.
+    #[must_use]
+    pub const fn has_method_summaries(&self) -> bool {
+        self.method_summaries.is_some()
     }
 
     /// Makes diagnostics other than notes fail with [`Error::StrictAnalysis`].
@@ -135,8 +149,26 @@ impl InferenceConfig {
         self
     }
 
+    /// Enables caller-provided return summaries for resolved member calls.
+    ///
+    /// The resolver is queried using only information already present in the
+    /// class file. It never causes the inferer to load classes or execute Java
+    /// code.
+    #[must_use]
+    pub fn with_shared_method_summaries(
+        mut self,
+        method_summaries: Arc<dyn MethodSummaryResolver>,
+    ) -> Self {
+        self.method_summaries = Some(method_summaries);
+        self
+    }
+
     pub(crate) fn type_hierarchy(&self) -> Option<&dyn TypeHierarchy> {
         self.hierarchy.as_deref()
+    }
+
+    pub(crate) fn method_summaries(&self) -> Option<&dyn MethodSummaryResolver> {
+        self.method_summaries.as_deref()
     }
 
     pub(crate) fn validate(&self) -> Result<(), Error> {

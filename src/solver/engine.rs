@@ -9,6 +9,7 @@ use crate::types::join_local_types;
 use crate::{
     ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
     Error, InferenceConfig, InferredType, InstructionInference, MethodInference, ReferenceType,
+    ReturnType, TypeDescriptor,
 };
 
 pub(crate) fn analyze_class(
@@ -52,6 +53,7 @@ fn analyze_method(
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
     let hierarchy = config.type_hierarchy();
+    let method_summaries = config.method_summaries();
     let mut diagnostics = cfg_result.diagnostics;
     let entry_frame = Frame::entry(
         owner,
@@ -77,6 +79,7 @@ fn analyze_method(
                     analysis_complete: true,
                     parameter_types,
                     return_type: method.descriptor.return_type().clone(),
+                    inferred_return_type: None,
                 },
                 entry_frame.locals,
                 Vec::new(),
@@ -113,7 +116,13 @@ fn analyze_method(
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
             terminator_branch_fact = branch_fact(instruction.opcode, &before);
-            transfer(method, instruction, &mut frame, &mut diagnostics);
+            transfer(
+                method,
+                instruction,
+                &mut frame,
+                &mut diagnostics,
+                method_summaries,
+            );
             let mut propagation = Propagation {
                 method,
                 diagnostics: &mut diagnostics,
@@ -186,7 +195,7 @@ fn analyze_method(
         );
     }
 
-    let observations = observe_final_frames(method, &graph, &incoming);
+    let observations = observe_final_frames(method, &graph, &incoming, method_summaries);
     let local_types = collect_local_types(
         &incoming,
         &observations,
@@ -194,6 +203,9 @@ fn analyze_method(
         method,
         hierarchy,
     );
+    let inferred_return_type = analysis_complete
+        .then(|| collect_inferred_return_type(method, &observations, hierarchy))
+        .flatten();
     let instructions = observations.into_values().collect();
     (
         MethodInference::new(
@@ -204,6 +216,7 @@ fn analyze_method(
                 analysis_complete,
                 parameter_types,
                 return_type: method.descriptor.return_type().clone(),
+                inferred_return_type,
             },
             local_types,
             instructions,
@@ -350,6 +363,7 @@ fn observe_final_frames(
     method: &MethodIr,
     graph: &crate::cfg::ControlFlowGraph,
     incoming: &HashMap<crate::cfg::BlockId, Frame>,
+    method_summaries: Option<&dyn crate::MethodSummaryResolver>,
 ) -> BTreeMap<u16, InstructionInference> {
     let mut observations = BTreeMap::new();
     let mut ignored_diagnostics = Vec::new();
@@ -362,7 +376,13 @@ fn observe_final_frames(
 
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
-            transfer(method, instruction, &mut frame, &mut ignored_diagnostics);
+            transfer(
+                method,
+                instruction,
+                &mut frame,
+                &mut ignored_diagnostics,
+                method_summaries,
+            );
             observations.insert(
                 instruction.offset,
                 InstructionInference::new(
@@ -377,6 +397,76 @@ fn observe_final_frames(
     }
 
     observations
+}
+
+fn collect_inferred_return_type(
+    method: &MethodIr,
+    observations: &BTreeMap<u16, InstructionInference>,
+    hierarchy: Option<&dyn crate::TypeHierarchy>,
+) -> Option<InferredType> {
+    let ReturnType::Type(declared_return_type) = method.descriptor.return_type() else {
+        return None;
+    };
+    let mut inferred_return_type = None;
+
+    for instruction in method
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.opcode, 0xac..=0xb0))
+    {
+        if !return_opcode_matches_descriptor(instruction.opcode, declared_return_type) {
+            return None;
+        }
+        let return_type = observations
+            .get(&instruction.offset)?
+            .stack_before()
+            .last()?;
+        if !return_value_matches_opcode(instruction.opcode, return_type) {
+            return None;
+        }
+        inferred_return_type = Some(match inferred_return_type {
+            Some(existing) => join_local_types(&existing, return_type, hierarchy),
+            None => return_type.clone(),
+        });
+    }
+
+    inferred_return_type
+}
+
+fn return_opcode_matches_descriptor(opcode: u8, descriptor: &TypeDescriptor) -> bool {
+    matches!(
+        (opcode, descriptor),
+        (
+            0xac,
+            TypeDescriptor::Primitive(
+                crate::PrimitiveType::Boolean
+                    | crate::PrimitiveType::Byte
+                    | crate::PrimitiveType::Char
+                    | crate::PrimitiveType::Short
+                    | crate::PrimitiveType::Int
+            )
+        ) | (0xad, TypeDescriptor::Primitive(crate::PrimitiveType::Long))
+            | (0xae, TypeDescriptor::Primitive(crate::PrimitiveType::Float))
+            | (
+                0xaf,
+                TypeDescriptor::Primitive(crate::PrimitiveType::Double)
+            )
+            | (
+                0xb0,
+                TypeDescriptor::Reference(_) | TypeDescriptor::Array { .. }
+            )
+    )
+}
+
+fn return_value_matches_opcode(opcode: u8, value: &InferredType) -> bool {
+    matches!(
+        (opcode, value),
+        (0xac, InferredType::Int)
+            | (0xad, InferredType::Long)
+            | (0xae, InferredType::Float)
+            | (0xaf, InferredType::Double)
+            | (0xb0, InferredType::Reference(_))
+    )
 }
 
 fn dynamic_call_kind(instruction: &InstructionIr) -> Option<crate::DynamicCallKind> {

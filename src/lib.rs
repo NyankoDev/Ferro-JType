@@ -19,6 +19,7 @@ mod hierarchy;
 mod ir;
 mod result;
 mod solver;
+mod summary;
 mod types;
 
 pub use api::{InferenceConfig, Inferer, infer_class};
@@ -26,6 +27,7 @@ pub use diagnostic::{Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticS
 pub use error::{DescriptorError, Error, NameError};
 pub use hierarchy::{ClassHierarchy, TypeHierarchy};
 pub use result::{ClassInference, InstructionInference, MethodInference};
+pub use summary::{MethodSummaries, MethodSummaryResolver};
 pub use types::{
     ClassName, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor, PrimitiveType,
     ReferenceType, ReturnType, TypeDescriptor,

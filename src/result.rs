@@ -77,6 +77,7 @@ pub struct MethodInference {
     analysis_complete: bool,
     parameter_types: Vec<InferredType>,
     return_type: ReturnType,
+    inferred_return_type: Option<InferredType>,
     local_types: Vec<InferredType>,
     instructions: Vec<InstructionInference>,
 }
@@ -87,6 +88,7 @@ pub(crate) struct MethodHeader {
     pub(crate) analysis_complete: bool,
     pub(crate) parameter_types: Vec<InferredType>,
     pub(crate) return_type: ReturnType,
+    pub(crate) inferred_return_type: Option<InferredType>,
 }
 
 impl MethodInference {
@@ -103,6 +105,7 @@ impl MethodInference {
             analysis_complete: header.analysis_complete,
             parameter_types: header.parameter_types,
             return_type: header.return_type,
+            inferred_return_type: header.inferred_return_type,
             local_types,
             instructions,
         }
@@ -142,6 +145,17 @@ impl MethodInference {
     #[must_use]
     pub const fn return_type(&self) -> &ReturnType {
         &self.return_type
+    }
+
+    /// Returns the inferred value type observed at reachable value-return instructions.
+    ///
+    /// This is more precise than [`Self::return_type`] when a method declares a
+    /// broad reference type but consistently returns a narrower one. `None`
+    /// means the method is void, did not reach a value return, or did not reach
+    /// a complete, descriptor-compatible fixed point.
+    #[must_use]
+    pub const fn inferred_return_type(&self) -> Option<&InferredType> {
+        self.inferred_return_type.as_ref()
     }
 
     /// Returns inferred local-variable types indexed by JVM local slot.

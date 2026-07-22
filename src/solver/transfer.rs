@@ -1,5 +1,6 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
+use crate::summary::MethodSummaryResolver;
 use crate::{
     ClassName, Diagnostic, InferredType, MethodDescriptor, ReferenceType, ReturnType,
     TypeDescriptor,
@@ -10,6 +11,7 @@ pub(crate) fn transfer(
     instruction: &InstructionIr,
     frame: &mut Frame,
     diagnostics: &mut Vec<Diagnostic>,
+    method_summaries: Option<&dyn MethodSummaryResolver>,
 ) {
     match instruction.opcode {
         0x00 => {}
@@ -99,7 +101,7 @@ pub(crate) fn transfer(
         0xb3 => field_put(instruction, frame, method, diagnostics, false),
         0xb4 => field_get(instruction, frame, method, diagnostics, true),
         0xb5 => field_put(instruction, frame, method, diagnostics, true),
-        0xb6..=0xb9 => invoke_member(instruction, frame, method, diagnostics),
+        0xb6..=0xb9 => invoke_member(instruction, frame, method, diagnostics, method_summaries),
         0xba => invoke_dynamic(instruction, frame, method, diagnostics),
         0xbb => allocate_object(instruction, frame),
         0xbc => allocate_primitive_array(instruction, frame, method, diagnostics),
@@ -275,6 +277,7 @@ fn invoke_member(
     frame: &mut Frame,
     method: &MethodIr,
     diagnostics: &mut Vec<Diagnostic>,
+    method_summaries: Option<&dyn MethodSummaryResolver>,
 ) {
     let Some((descriptor, member)) = method_call_descriptor(instruction, method, diagnostics)
     else {
@@ -302,7 +305,9 @@ fn invoke_member(
         }
     }
 
-    push_return_type(&descriptor, frame);
+    let summary_return_type =
+        member.and_then(|member| resolve_method_summary(member, &descriptor, method_summaries));
+    push_return_type(&descriptor, summary_return_type, frame);
 }
 
 fn invoke_dynamic(
@@ -326,7 +331,7 @@ fn invoke_dynamic(
     for _ in descriptor.parameters() {
         discard(frame, method, instruction, diagnostics);
     }
-    push_return_type(&descriptor, frame);
+    push_return_type(&descriptor, None, frame);
 }
 
 fn method_call_descriptor<'a>(
@@ -353,9 +358,54 @@ fn method_call_descriptor<'a>(
     }
 }
 
-fn push_return_type(descriptor: &MethodDescriptor, frame: &mut Frame) {
+fn resolve_method_summary(
+    member: &MemberRefIr,
+    descriptor: &MethodDescriptor,
+    method_summaries: Option<&dyn MethodSummaryResolver>,
+) -> Option<InferredType> {
+    let MemberRefIr::Resolved { owner, name, .. } = member else {
+        return None;
+    };
+    let return_type = method_summaries?.return_type(owner, name, descriptor)?;
+    method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
+}
+
+fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &InferredType) -> bool {
+    match descriptor.return_type() {
+        ReturnType::Void => false,
+        ReturnType::Type(TypeDescriptor::Primitive(primitive)) => matches!(
+            (primitive, return_type),
+            (
+                crate::PrimitiveType::Boolean
+                    | crate::PrimitiveType::Byte
+                    | crate::PrimitiveType::Char
+                    | crate::PrimitiveType::Short
+                    | crate::PrimitiveType::Int,
+                InferredType::Int
+            ) | (crate::PrimitiveType::Float, InferredType::Float)
+                | (crate::PrimitiveType::Long, InferredType::Long)
+                | (crate::PrimitiveType::Double, InferredType::Double)
+        ),
+        ReturnType::Type(TypeDescriptor::Reference(_)) => matches!(
+            return_type,
+            InferredType::Reference(
+                ReferenceType::Exact(_) | ReferenceType::Array(_) | ReferenceType::Null
+            )
+        ),
+        ReturnType::Type(TypeDescriptor::Array { .. }) => matches!(
+            return_type,
+            InferredType::Reference(ReferenceType::Array(_) | ReferenceType::Null)
+        ),
+    }
+}
+
+fn push_return_type(
+    descriptor: &MethodDescriptor,
+    summary_return_type: Option<InferredType>,
+    frame: &mut Frame,
+) {
     if let ReturnType::Type(return_type) = descriptor.return_type() {
-        frame.push(inferred_from_descriptor(return_type));
+        frame.push(summary_return_type.unwrap_or_else(|| inferred_from_descriptor(return_type)));
     }
 }
 
