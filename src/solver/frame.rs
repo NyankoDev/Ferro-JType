@@ -8,7 +8,6 @@ pub(crate) struct Frame {
 }
 
 pub(crate) struct MergeOutcome {
-    pub(crate) changed: bool,
     pub(crate) stack_height_mismatch: bool,
 }
 
@@ -91,18 +90,16 @@ impl Frame {
         }
     }
 
-    pub(crate) fn apply_verification_frame(&mut self, verification: &VerificationFrameIr) -> bool {
+    pub(crate) fn apply_verification_frame(&mut self, verification: &VerificationFrameIr) {
         if self.locals == verification.locals && self.stack == verification.stack {
-            return false;
+            return;
         }
 
         self.locals.clone_from(&verification.locals);
         self.stack.clone_from(&verification.stack);
-        true
     }
 
     pub(crate) fn merge_from(&mut self, incoming: &Self) -> MergeOutcome {
-        let mut changed = false;
         let mut stack_height_mismatch = false;
 
         let local_count = self.locals.len().max(incoming.locals.len());
@@ -111,7 +108,6 @@ impl Frame {
             let merged = self.locals[index].join(value);
             if merged != self.locals[index] {
                 self.locals[index] = merged;
-                changed = true;
             }
         }
 
@@ -120,7 +116,6 @@ impl Frame {
             let merged = vec![InferredType::Conflict; stack_len];
             if self.stack != merged {
                 self.stack = merged;
-                changed = true;
             }
             stack_height_mismatch = true;
         } else {
@@ -128,13 +123,11 @@ impl Frame {
                 let merged = existing.join(value);
                 if merged != *existing {
                     *existing = merged;
-                    changed = true;
                 }
             }
         }
 
         MergeOutcome {
-            changed,
             stack_height_mismatch,
         }
     }

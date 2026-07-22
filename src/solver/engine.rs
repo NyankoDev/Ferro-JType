@@ -192,10 +192,11 @@ fn merge_frame(
         return true;
     };
 
+    let previous = existing.clone();
     let outcome = existing.merge_from(&outgoing);
-    let verification_changed = verification
-        .map(|verification| existing.apply_verification_frame(verification))
-        .unwrap_or(false);
+    if let Some(verification) = verification {
+        existing.apply_verification_frame(verification);
+    }
     if outcome.stack_height_mismatch {
         diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
@@ -204,7 +205,7 @@ fn merge_frame(
             "control-flow paths reached a block with different operand-stack heights",
         ));
     }
-    outcome.changed || verification_changed
+    *existing != previous
 }
 
 fn collect_local_types(
