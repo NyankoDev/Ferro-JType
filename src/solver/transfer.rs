@@ -1,5 +1,7 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
-use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
+use crate::solver::frame::{
+    Frame, FrameValue, InstanceOfFact, ValueOrigin, inferred_from_descriptor,
+};
 use crate::summary::{FieldSummaryResolver, MethodSummaryResolver, value_type_matches_descriptor};
 use crate::{
     ClassName, Diagnostic, InferredType, MethodDescriptor, MethodInvocationKind, ReferenceType,
@@ -315,25 +317,32 @@ fn invoke_member(
     arguments.reverse();
 
     let receiver =
-        (instruction.opcode != 0xb8).then(|| pop(frame, method, instruction, diagnostics));
-    if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, receiver)
+        (instruction.opcode != 0xb8).then(|| pop_value(frame, method, instruction, diagnostics));
+    if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, &receiver)
         && name == "<init>"
     {
-        match receiver {
+        match &receiver.value {
             InferredType::Uninitialized {
                 allocation_offset, ..
-            } => frame.replace_uninitialized(allocation_offset, owner.clone()),
+            } => frame.replace_uninitialized(*allocation_offset, owner.clone()),
             InferredType::UninitializedThis { class_name } => {
-                frame.replace_uninitialized_this(class_name)
+                frame.replace_uninitialized_this(class_name.clone())
             }
             _ => {}
         }
     }
 
     let invocation_kind = MethodInvocationKind::from_opcode(instruction.opcode);
+    let receiver_is_exact_allocation = receiver_is_exact_allocation(member, receiver.as_ref());
     let summary_return_type = invocation_kind.and_then(|invocation_kind| {
         member.and_then(|member| {
-            resolve_method_summary(member, &descriptor, method_summaries, invocation_kind)
+            resolve_method_summary(
+                member,
+                &descriptor,
+                method_summaries,
+                invocation_kind,
+                receiver_is_exact_allocation,
+            )
         })
     });
     let parameter_return_type = invocation_kind.and_then(|invocation_kind| {
@@ -344,6 +353,7 @@ fn invoke_member(
                 method_summaries,
                 invocation_kind,
                 &arguments,
+                receiver_is_exact_allocation,
             )
         })
     });
@@ -407,12 +417,18 @@ fn resolve_method_summary(
     descriptor: &MethodDescriptor,
     method_summaries: Option<&dyn MethodSummaryResolver>,
     invocation_kind: MethodInvocationKind,
+    receiver_is_exact_allocation: bool,
 ) -> Option<InferredType> {
     let MemberRefIr::Resolved { owner, name, .. } = member else {
         return None;
     };
-    let return_type =
-        method_summaries?.return_type_for_invocation(owner, name, descriptor, invocation_kind)?;
+    let return_type = method_summaries?.return_type_for_call(
+        owner,
+        name,
+        descriptor,
+        invocation_kind,
+        receiver_is_exact_allocation,
+    )?;
     method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
 }
 
@@ -422,15 +438,17 @@ fn resolve_returned_parameter(
     method_summaries: Option<&dyn MethodSummaryResolver>,
     invocation_kind: MethodInvocationKind,
     arguments: &[InferredType],
+    receiver_is_exact_allocation: bool,
 ) -> Option<InferredType> {
     let MemberRefIr::Resolved { owner, name, .. } = member else {
         return None;
     };
-    let parameter_index = method_summaries?.returned_parameter_index_for_invocation(
+    let parameter_index = method_summaries?.returned_parameter_index_for_call(
         owner,
         name,
         descriptor,
         invocation_kind,
+        receiver_is_exact_allocation,
     )?;
     let return_type = arguments.get(parameter_index)?.clone();
     method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
@@ -485,12 +503,26 @@ fn field_type(
 fn allocate_object(instruction: &InstructionIr, frame: &mut Frame) {
     let class_name = type_name(instruction).and_then(|name| ClassName::parse(name).ok());
     match class_name {
-        Some(class_name) => frame.push(InferredType::Uninitialized {
-            class_name,
-            allocation_offset: instruction.offset,
-        }),
+        Some(class_name) => frame.push_allocation(class_name, instruction.offset),
         None => frame.push(InferredType::Reference(ReferenceType::Unknown)),
     }
+}
+
+fn receiver_is_exact_allocation(
+    member: Option<&MemberRefIr>,
+    receiver: Option<&FrameValue>,
+) -> bool {
+    let Some(MemberRefIr::Resolved { owner, .. }) = member else {
+        return false;
+    };
+    matches!(
+        receiver,
+        Some(FrameValue {
+            value: InferredType::Reference(ReferenceType::Exact(class_name)),
+            local_origin: Some(ValueOrigin::Allocation { .. }),
+            ..
+        }) if class_name == owner
+    )
 }
 
 fn allocate_primitive_array(

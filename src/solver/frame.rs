@@ -33,6 +33,7 @@ pub(crate) struct InstanceOfFact {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueOrigin {
     Entry(u16),
+    Allocation { offset: u16 },
     Store { local: u16, offset: u16 },
 }
 
@@ -154,6 +155,17 @@ impl Frame {
 
     pub(crate) fn push(&mut self, value: InferredType) {
         self.push_value(FrameValue::plain(value));
+    }
+
+    pub(crate) fn push_allocation(&mut self, class_name: ClassName, allocation_offset: u16) {
+        let mut value = FrameValue::plain(InferredType::Uninitialized {
+            class_name,
+            allocation_offset,
+        });
+        value.local_origin = Some(ValueOrigin::Allocation {
+            offset: allocation_offset,
+        });
+        self.push_value(value);
     }
 
     pub(crate) fn pop_value(&mut self) -> Option<FrameValue> {

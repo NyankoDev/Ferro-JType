@@ -32,6 +32,22 @@ pub trait MethodSummaryResolver: Send + Sync {
         self.return_type(owner, name, descriptor)
     }
 
+    /// Returns the inferred return type with receiver-allocation context.
+    ///
+    /// The default preserves invocation-kind behavior. Override this when a
+    /// summary is valid only for a receiver created by a known `new` instruction.
+    fn return_type_for_call(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+        receiver_is_exact_allocation: bool,
+    ) -> Option<InferredType> {
+        let _ = receiver_is_exact_allocation;
+        self.return_type_for_invocation(owner, name, descriptor, invocation_kind)
+    }
+
     /// Returns an argument index propagated unchanged by one invocation.
     ///
     /// The default reports no parameter relation. A returned index uses the
@@ -46,6 +62,21 @@ pub trait MethodSummaryResolver: Send + Sync {
     ) -> Option<usize> {
         let _ = (owner, name, descriptor, invocation_kind);
         None
+    }
+
+    /// Returns an argument index with receiver-allocation context.
+    ///
+    /// The default preserves invocation-kind behavior.
+    fn returned_parameter_index_for_call(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+        receiver_is_exact_allocation: bool,
+    ) -> Option<usize> {
+        let _ = receiver_is_exact_allocation;
+        self.returned_parameter_index_for_invocation(owner, name, descriptor, invocation_kind)
     }
 }
 
