@@ -93,7 +93,7 @@ fn analyze_method(
 
     while let Some(block_id) = worklist.pop_front() {
         total_work_items += 1;
-        if total_work_items > config.max_work_items() {
+        if !config.unbounded_analysis() && total_work_items > config.max_work_items() {
             diagnostics.push(limit_diagnostic(method, "work-item budget"));
             analysis_complete = false;
             break;
@@ -101,7 +101,7 @@ fn analyze_method(
 
         let visits_for_block = visits.entry(block_id).or_insert(0_usize);
         *visits_for_block += 1;
-        if *visits_for_block > config.max_block_iterations() {
+        if !config.unbounded_analysis() && *visits_for_block > config.max_block_iterations() {
             diagnostics.push(limit_diagnostic(method, "per-block iteration budget"));
             analysis_complete = false;
             continue;

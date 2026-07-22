@@ -14,6 +14,7 @@ pub struct InferenceConfig {
     strict: bool,
     max_block_iterations: usize,
     max_work_items: usize,
+    unbounded_analysis: bool,
     hierarchy: Option<Arc<dyn TypeHierarchy>>,
 }
 
@@ -24,6 +25,7 @@ impl std::fmt::Debug for InferenceConfig {
             .field("strict", &self.strict)
             .field("max_block_iterations", &self.max_block_iterations)
             .field("max_work_items", &self.max_work_items)
+            .field("unbounded_analysis", &self.unbounded_analysis)
             .field("has_type_hierarchy", &self.hierarchy.is_some())
             .finish()
     }
@@ -34,6 +36,7 @@ impl PartialEq for InferenceConfig {
         self.strict == other.strict
             && self.max_block_iterations == other.max_block_iterations
             && self.max_work_items == other.max_work_items
+            && self.unbounded_analysis == other.unbounded_analysis
             && match (&self.hierarchy, &other.hierarchy) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 (None, None) => true,
@@ -50,6 +53,7 @@ impl Default for InferenceConfig {
             strict: false,
             max_block_iterations: 128,
             max_work_items: 50_000,
+            unbounded_analysis: false,
             hierarchy: None,
         }
     }
@@ -72,6 +76,12 @@ impl InferenceConfig {
     #[must_use]
     pub const fn max_work_items(&self) -> usize {
         self.max_work_items
+    }
+
+    /// Returns whether analysis ignores configured work limits.
+    #[must_use]
+    pub const fn unbounded_analysis(&self) -> bool {
+        self.unbounded_analysis
     }
 
     /// Returns whether optional class-hierarchy refinement is enabled.
@@ -102,6 +112,16 @@ impl InferenceConfig {
     #[must_use]
     pub const fn with_max_work_items(mut self, max_work_items: usize) -> Self {
         self.max_work_items = max_work_items;
+        self
+    }
+
+    /// Disables work-item and per-block limits for trusted, difficult inputs.
+    ///
+    /// This is useful for deeply flattened control flow when completion is more
+    /// important than a fixed resource budget. It never executes Java code.
+    #[must_use]
+    pub const fn with_unbounded_analysis(mut self) -> Self {
+        self.unbounded_analysis = true;
         self
     }
 
