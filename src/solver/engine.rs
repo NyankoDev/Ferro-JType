@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::cfg::{EdgeKind, build_cfg};
+use crate::cfg::build_cfg;
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
@@ -98,7 +98,17 @@ fn analyze_method(
         let block = &graph.blocks[block_id];
         let mut frame = incoming[&block_id].clone();
         for instruction in &method.instructions[block.instruction_range.clone()] {
+            let before = frame.clone();
             transfer(method, instruction, &mut frame, &mut diagnostics);
+            propagate_exception_edges(
+                &block.exception_successors,
+                instruction.offset,
+                before,
+                &mut incoming,
+                method,
+                &mut diagnostics,
+                &mut worklist,
+            );
             if frame.stack.len() > usize::from(method.max_stack) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticSeverity::Warning,
@@ -115,10 +125,7 @@ fn analyze_method(
         }
 
         for edge in &block.successors {
-            let outgoing = match &edge.kind {
-                EdgeKind::Exception { catch_type } => frame.exception_frame(catch_type.clone()),
-                EdgeKind::FallThrough | EdgeKind::Branch | EdgeKind::Switch => frame.clone(),
-            };
+            let outgoing = frame.clone();
             let changed = merge_frame(
                 &mut incoming,
                 edge.target,
@@ -147,6 +154,33 @@ fn analyze_method(
         ),
         diagnostics,
     )
+}
+
+fn propagate_exception_edges(
+    edges: &[crate::cfg::ExceptionEdge],
+    instruction_offset: u16,
+    before: Frame,
+    incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
+    method: &MethodIr,
+    diagnostics: &mut Vec<Diagnostic>,
+    worklist: &mut VecDeque<crate::cfg::BlockId>,
+) {
+    for edge in edges
+        .iter()
+        .filter(|edge| edge.instruction_offset == instruction_offset)
+    {
+        let outgoing = before.exception_frame(edge.catch_type.clone());
+        if merge_frame(
+            incoming,
+            edge.target,
+            outgoing,
+            method,
+            instruction_offset,
+            diagnostics,
+        ) {
+            worklist.push_back(edge.target);
+        }
+    }
 }
 
 fn observe_final_frames(

@@ -17,6 +17,7 @@ pub(crate) struct BasicBlock {
     pub(crate) start_offset: u16,
     pub(crate) instruction_range: Range<usize>,
     pub(crate) successors: Vec<Edge>,
+    pub(crate) exception_successors: Vec<ExceptionEdge>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,10 +26,16 @@ pub(crate) struct Edge {
     pub(crate) kind: EdgeKind,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ExceptionEdge {
+    pub(crate) instruction_offset: u16,
+    pub(crate) target: BlockId,
+    pub(crate) catch_type: Option<ClassName>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EdgeKind {
     FallThrough,
     Branch,
     Switch,
-    Exception { catch_type: Option<ClassName> },
 }

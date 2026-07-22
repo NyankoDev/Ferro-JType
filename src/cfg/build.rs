@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use la_arena::Arena;
 
-use crate::cfg::{BasicBlock, BlockId, ControlFlowGraph, Edge, EdgeKind};
+use crate::cfg::{BasicBlock, BlockId, ControlFlowGraph, Edge, EdgeKind, ExceptionEdge};
 use crate::ir::{InstructionOperandIr, MethodIr};
 use crate::{Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity};
 
@@ -89,6 +89,7 @@ pub(crate) fn build_cfg(method: &MethodIr) -> CfgBuildResult {
             start_offset,
             instruction_range: start_index..end_index,
             successors: Vec::new(),
+            exception_successors: Vec::new(),
         });
         block_by_offset.insert(start_offset, block);
     }
@@ -110,18 +111,23 @@ pub(crate) fn build_cfg(method: &MethodIr) -> CfgBuildResult {
             }
         }
 
-        for handler in &method.exception_handlers {
-            if block.start_offset >= handler.start_offset
-                && block.start_offset < handler.end_offset
-                && let Some(target) = block_by_offset.get(&handler.handler_offset).copied()
-            {
-                push_edge(
-                    &mut block.successors,
-                    target,
-                    EdgeKind::Exception {
-                        catch_type: handler.catch_type.clone(),
-                    },
-                );
+        for instruction in &method.instructions[block.instruction_range.clone()] {
+            if !may_throw(instruction.opcode) {
+                continue;
+            }
+
+            for handler in &method.exception_handlers {
+                if instruction.offset >= handler.start_offset
+                    && instruction.offset < handler.end_offset
+                    && let Some(target) = block_by_offset.get(&handler.handler_offset).copied()
+                {
+                    push_exception_edge(
+                        &mut block.exception_successors,
+                        instruction.offset,
+                        target,
+                        handler.catch_type.clone(),
+                    );
+                }
             }
         }
     }
@@ -249,6 +255,25 @@ fn push_edge(edges: &mut Vec<Edge>, target: BlockId, kind: EdgeKind) {
     }
 }
 
+fn push_exception_edge(
+    edges: &mut Vec<ExceptionEdge>,
+    instruction_offset: u16,
+    target: BlockId,
+    catch_type: Option<crate::ClassName>,
+) {
+    if !edges.iter().any(|edge| {
+        edge.instruction_offset == instruction_offset
+            && edge.target == target
+            && edge.catch_type == catch_type
+    }) {
+        edges.push(ExceptionEdge {
+            instruction_offset,
+            target,
+            catch_type,
+        });
+    }
+}
+
 fn invalid_target_diagnostic(method: &MethodIr, source_offset: u16, target: i32) -> Diagnostic {
     Diagnostic::new(
         DiagnosticSeverity::Warning,
@@ -272,4 +297,20 @@ const fn is_unconditional_branch(opcode: u8) -> bool {
 
 const fn is_subroutine_branch(opcode: u8) -> bool {
     matches!(opcode, 0xa8 | 0xc9)
+}
+
+const fn may_throw(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        0x12..=0x14
+            | 0x2e..=0x35
+            | 0x4f..=0x56
+            | 0x6c
+            | 0x6d
+            | 0x70
+            | 0x71
+            | 0xb2..=0xbf
+            | 0xc0..=0xc3
+            | 0xc5
+    )
 }
