@@ -34,4 +34,6 @@ pub enum Error {
     Descriptor(#[from] DescriptorError),
     #[error("invalid inference configuration: {message}")]
     InvalidConfiguration { message: String },
+    #[error("strict analysis rejected a diagnostic: {message}")]
+    StrictAnalysis { message: String },
 }

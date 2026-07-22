@@ -33,6 +33,19 @@ pub enum TypeDescriptor {
 }
 
 impl TypeDescriptor {
+    pub fn parse(input: &str) -> Result<Self, DescriptorError> {
+        let mut parser = DescriptorParser::new(input);
+        let descriptor = parser.parse_field_type()?;
+
+        if !parser.is_finished() {
+            return Err(DescriptorError::TrailingInput {
+                offset: parser.offset(),
+            });
+        }
+
+        Ok(descriptor)
+    }
+
     #[must_use]
     pub const fn slot_width(&self) -> u8 {
         match self {
