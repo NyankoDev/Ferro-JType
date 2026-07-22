@@ -19,6 +19,7 @@ pub(crate) fn analyze_class(
     let method_indices = local_method_indices(class);
     let local_calls = LocalMethodCalls {
         owner: &class.name,
+        class_is_final: class.access_flags & 0x0010 != 0,
         methods: &class.methods,
         method_indices: &method_indices,
     };
@@ -413,7 +414,7 @@ fn local_call_is_deterministic(
     match invocation_kind {
         MethodInvocationKind::Static | MethodInvocationKind::Special => true,
         MethodInvocationKind::Virtual => {
-            if receiver_is_exact_allocation {
+            if local_calls.class_is_final || receiver_is_exact_allocation {
                 return true;
             }
             let key = MethodKey {
@@ -431,6 +432,7 @@ fn local_call_is_deterministic(
 
 struct LocalMethodCalls<'a> {
     owner: &'a ClassName,
+    class_is_final: bool,
     methods: &'a [MethodIr],
     method_indices: &'a HashMap<MethodKey, usize>,
 }

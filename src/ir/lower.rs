@@ -59,6 +59,7 @@ fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<Clas
 
     Ok(ClassIr {
         name,
+        access_flags: class.access_flags(),
         generic_signature: generic_metadata.class_signature.clone(),
         diagnostics: Vec::new(),
         methods,

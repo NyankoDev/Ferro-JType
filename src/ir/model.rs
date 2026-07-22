@@ -5,6 +5,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
     pub(crate) name: ClassName,
+    pub(crate) access_flags: u16,
     pub(crate) generic_signature: Option<GenericSignature>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) methods: Vec<MethodIr>,
