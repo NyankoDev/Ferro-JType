@@ -1,4 +1,7 @@
-use crate::{ClassName, Diagnostic, GenericSignature, InferredType, MethodDescriptor, ReturnType};
+use crate::{
+    ClassName, Diagnostic, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor,
+    ReturnType,
+};
 
 /// Type-inference results for one Java class file.
 ///
@@ -139,6 +142,7 @@ impl MethodInference {
 #[derive(Debug, Clone)]
 pub struct InstructionInference {
     bytecode_offset: u16,
+    dynamic_call_kind: Option<DynamicCallKind>,
     local_types: Vec<InferredType>,
     stack_before: Vec<InferredType>,
     stack_after: Vec<InferredType>,
@@ -147,12 +151,14 @@ pub struct InstructionInference {
 impl InstructionInference {
     pub(crate) fn new(
         bytecode_offset: u16,
+        dynamic_call_kind: Option<DynamicCallKind>,
         local_types: Vec<InferredType>,
         stack_before: Vec<InferredType>,
         stack_after: Vec<InferredType>,
     ) -> Self {
         Self {
             bytecode_offset,
+            dynamic_call_kind,
             local_types,
             stack_before,
             stack_after,
@@ -163,6 +169,12 @@ impl InstructionInference {
     #[must_use]
     pub const fn bytecode_offset(&self) -> u16 {
         self.bytecode_offset
+    }
+
+    /// Returns recognized bootstrap metadata for an `invokedynamic` instruction.
+    #[must_use]
+    pub const fn dynamic_call_kind(&self) -> Option<DynamicCallKind> {
+        self.dynamic_call_kind
     }
 
     /// Returns local-variable types immediately before this instruction.

@@ -318,6 +318,7 @@ fn observe_final_frames(
                 instruction.offset,
                 InstructionInference::new(
                     instruction.offset,
+                    dynamic_call_kind(instruction),
                     before.locals,
                     before.stack,
                     frame.stack.clone(),
@@ -327,6 +328,13 @@ fn observe_final_frames(
     }
 
     observations
+}
+
+fn dynamic_call_kind(instruction: &InstructionIr) -> Option<crate::DynamicCallKind> {
+    let InstructionOperandIr::InvokeDynamic { kind, .. } = instruction.operand else {
+        return None;
+    };
+    Some(kind)
 }
 
 fn merge_frame(

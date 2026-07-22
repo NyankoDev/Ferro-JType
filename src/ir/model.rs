@@ -1,4 +1,4 @@
-use crate::{ClassName, GenericSignature, MethodDescriptor, TypeDescriptor};
+use crate::{ClassName, DynamicCallKind, GenericSignature, MethodDescriptor, TypeDescriptor};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
@@ -45,6 +45,7 @@ pub(crate) enum InstructionOperandIr {
     InvokeDynamic {
         descriptor: Option<String>,
         constant_pool_index: u16,
+        kind: DynamicCallKind,
     },
     Branch {
         target: i32,

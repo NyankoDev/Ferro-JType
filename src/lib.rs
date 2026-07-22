@@ -27,6 +27,6 @@ pub use error::{DescriptorError, Error, NameError};
 pub use hierarchy::{ClassHierarchy, TypeHierarchy};
 pub use result::{ClassInference, InstructionInference, MethodInference};
 pub use types::{
-    ClassName, GenericSignature, InferredType, MethodDescriptor, PrimitiveType, ReferenceType,
-    ReturnType, TypeDescriptor,
+    ClassName, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor, PrimitiveType,
+    ReferenceType, ReturnType, TypeDescriptor,
 };

@@ -5,13 +5,15 @@ use ferro_babe::model::{
 };
 use ferro_babe::{Class, Disassembler, RecoveryMode};
 use rust_asm::class_reader::{AttributeInfo, read_class_file};
+use rust_asm::constant_pool::CpInfo;
 
 use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
     MethodIr, strip_stack_map_tables,
 };
 use crate::{
-    ClassName, DescriptorError, Error, GenericSignature, MethodDescriptor, TypeDescriptor,
+    ClassName, DescriptorError, DynamicCallKind, Error, GenericSignature, MethodDescriptor,
+    TypeDescriptor,
 };
 
 pub(crate) fn parse_and_lower(bytes: &[u8]) -> Result<ClassIr, Error> {
@@ -34,7 +36,7 @@ fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<Clas
                 .method_signatures
                 .get(&(method.name().to_owned(), method.descriptor().to_owned()))
                 .cloned();
-            lower_method(class, method, generic_signature)
+            lower_method(class, method, generic_signature, generic_metadata)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -49,13 +51,14 @@ fn lower_method(
     class: &Class,
     method: ferro_babe::model::Method<'_>,
     generic_signature: Option<GenericSignature>,
+    metadata: &GenericMetadata,
 ) -> Result<MethodIr, Error> {
     let descriptor = MethodDescriptor::parse(method.descriptor())?;
     let instructions = method
         .instructions()
         .map(|instructions| {
             instructions
-                .map(|instruction| lower_instruction(class, instruction))
+                .map(|instruction| lower_instruction(class, instruction, metadata))
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?
@@ -88,6 +91,7 @@ fn lower_method(
 struct GenericMetadata {
     class_signature: Option<GenericSignature>,
     method_signatures: BTreeMap<(String, String), GenericSignature>,
+    dynamic_call_kinds: BTreeMap<u16, DynamicCallKind>,
 }
 
 fn extract_generic_metadata(bytes: &[u8]) -> GenericMetadata {
@@ -105,9 +109,11 @@ fn extract_generic_metadata(bytes: &[u8]) -> GenericMetadata {
             Some(((name, descriptor), signature))
         })
         .collect();
+    let dynamic_call_kinds = dynamic_call_kinds(&class_file);
     GenericMetadata {
         class_signature,
         method_signatures,
+        dynamic_call_kinds,
     }
 }
 
@@ -128,9 +134,85 @@ fn signature_from_attributes(
         .map(GenericSignature::new)
 }
 
+fn dynamic_call_kinds(
+    class_file: &rust_asm::class_reader::ClassFile,
+) -> BTreeMap<u16, DynamicCallKind> {
+    class_file
+        .constant_pool
+        .iter()
+        .enumerate()
+        .filter_map(|(index, constant)| {
+            let CpInfo::InvokeDynamic {
+                bootstrap_method_attr_index,
+                ..
+            } = constant
+            else {
+                return None;
+            };
+            let kind = bootstrap_kind(class_file, *bootstrap_method_attr_index)
+                .unwrap_or(DynamicCallKind::OtherBootstrap);
+            Some((u16::try_from(index).ok()?, kind))
+        })
+        .collect()
+}
+
+fn bootstrap_kind(
+    class_file: &rust_asm::class_reader::ClassFile,
+    bootstrap_index: u16,
+) -> Option<DynamicCallKind> {
+    let methods = class_file
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            AttributeInfo::BootstrapMethods { methods } => Some(methods),
+            _ => None,
+        })?;
+    let bootstrap = methods.get(usize::from(bootstrap_index))?;
+    let CpInfo::MethodHandle {
+        reference_index, ..
+    } = class_file
+        .constant_pool
+        .get(usize::from(bootstrap.bootstrap_method_ref))?
+    else {
+        return None;
+    };
+    let (class_index, name_and_type_index) = match class_file
+        .constant_pool
+        .get(usize::from(*reference_index))?
+    {
+        CpInfo::Methodref {
+            class_index,
+            name_and_type_index,
+        }
+        | CpInfo::InterfaceMethodref {
+            class_index,
+            name_and_type_index,
+        } => (*class_index, *name_and_type_index),
+        _ => return None,
+    };
+    let owner = class_file.class_name(class_index).ok()?;
+    let CpInfo::NameAndType { name_index, .. } = class_file
+        .constant_pool
+        .get(usize::from(name_and_type_index))?
+    else {
+        return None;
+    };
+    let name = class_file.cp_utf8(*name_index).ok()?;
+    match (owner, name) {
+        ("java/lang/invoke/LambdaMetafactory", "metafactory" | "altMetafactory") => {
+            Some(DynamicCallKind::LambdaMetafactory)
+        }
+        ("java/lang/invoke/StringConcatFactory", "makeConcat" | "makeConcatWithConstants") => {
+            Some(DynamicCallKind::StringConcatFactory)
+        }
+        _ => Some(DynamicCallKind::OtherBootstrap),
+    }
+}
+
 fn lower_instruction(
     class: &Class,
     instruction: ferro_babe::model::Instruction<'_>,
+    metadata: &GenericMetadata,
 ) -> Result<InstructionIr, Error> {
     let operand = match instruction.operand() {
         InstructionOperand::None => InstructionOperandIr::None,
@@ -155,6 +237,11 @@ fn lower_instruction(
         InstructionOperand::InvokeDynamic { call_site } => InstructionOperandIr::InvokeDynamic {
             descriptor: resolve_dynamic_descriptor(class, call_site),
             constant_pool_index: call_site.get(),
+            kind: metadata
+                .dynamic_call_kinds
+                .get(&call_site.get())
+                .copied()
+                .unwrap_or(DynamicCallKind::OtherBootstrap),
         },
         InstructionOperand::Branch { target, .. } => InstructionOperandIr::Branch { target },
         InstructionOperand::Ldc(value) => {
