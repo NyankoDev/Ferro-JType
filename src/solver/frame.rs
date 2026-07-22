@@ -10,8 +10,9 @@ pub(crate) struct Frame {
     pub(crate) locals: Vec<InferredType>,
     pub(crate) stack: Vec<InferredType>,
     local_return_targets: Vec<Option<BTreeSet<u16>>>,
+    local_value_origins: Vec<Option<ValueOrigin>>,
     stack_return_targets: Vec<Option<BTreeSet<u16>>>,
-    stack_local_origins: Vec<Option<u16>>,
+    stack_local_origins: Vec<Option<ValueOrigin>>,
     stack_instanceof_facts: Vec<Option<InstanceOfFact>>,
 }
 
@@ -19,14 +20,20 @@ pub(crate) struct Frame {
 pub(crate) struct FrameValue {
     pub(crate) value: InferredType,
     return_targets: Option<BTreeSet<u16>>,
-    pub(crate) local_origin: Option<u16>,
+    pub(crate) local_origin: Option<ValueOrigin>,
     instanceof_fact: Option<InstanceOfFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstanceOfFact {
-    pub(crate) local: u16,
+    pub(crate) origin: ValueOrigin,
     pub(crate) reference: ReferenceType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueOrigin {
+    Entry(u16),
+    Store { local: u16, offset: u16 },
 }
 
 impl FrameValue {
@@ -55,6 +62,7 @@ impl Frame {
         let mut locals = vec![InferredType::Bottom; usize::from(max_locals)];
         let mut slot = 0_usize;
 
+        let mut local_value_origins = vec![None; locals.len()];
         if access_flags & 0x0008 == 0 {
             locals.resize(slot + 1, InferredType::Bottom);
             locals[slot] = if is_constructor {
@@ -64,6 +72,8 @@ impl Frame {
             } else {
                 InferredType::Reference(ReferenceType::Exact(owner.clone()))
             };
+            local_value_origins.resize(slot + 1, None);
+            local_value_origins[slot] = Some(ValueOrigin::Entry(0));
             slot += 1;
         }
 
@@ -74,11 +84,15 @@ impl Frame {
                 InferredType::Bottom,
             );
             locals[slot] = value;
+            local_value_origins.resize(locals.len(), None);
+            local_value_origins[slot] =
+                Some(ValueOrigin::Entry(u16::try_from(slot).unwrap_or(u16::MAX)));
             slot += usize::from(parameter.slot_width());
         }
 
         Self {
             local_return_targets: vec![None; locals.len()],
+            local_value_origins,
             locals,
             stack: Vec::new(),
             stack_return_targets: Vec::new(),
@@ -88,7 +102,9 @@ impl Frame {
     }
 
     pub(crate) fn set_local(&mut self, local: u16, value: InferredType) {
-        self.set_local_value(local, FrameValue::plain(value));
+        let mut value = FrameValue::plain(value);
+        value.local_origin = Some(ValueOrigin::Store { local, offset: 0 });
+        self.set_local_value(local, value);
     }
 
     pub(crate) fn get_local_value(&self, local: u16) -> FrameValue {
@@ -118,12 +134,22 @@ impl Frame {
         let length = self.locals.len().max(local + width);
         self.locals.resize(length, InferredType::Bottom);
         self.local_return_targets.resize(length, None);
+        self.local_value_origins.resize(length, None);
         self.locals[local] = value.value;
         self.local_return_targets[local] = value.return_targets;
+        self.local_value_origins[local] = value.local_origin;
         if width == 2 {
             self.locals[local + 1] = InferredType::Bottom;
             self.local_return_targets[local + 1] = None;
+            self.local_value_origins[local + 1] = None;
         }
+    }
+
+    pub(crate) fn store_local_value(&mut self, local: u16, mut value: FrameValue, offset: u16) {
+        if value.local_origin.is_none() {
+            value.local_origin = Some(ValueOrigin::Store { local, offset });
+        }
+        self.set_local_value(local, value);
     }
 
     pub(crate) fn push(&mut self, value: InferredType) {
@@ -171,7 +197,11 @@ impl Frame {
 
     pub(crate) fn push_local(&mut self, local: u16) {
         let mut value = self.get_local_value(local);
-        value.local_origin = Some(local);
+        value.local_origin = self
+            .local_value_origins
+            .get(usize::from(local))
+            .copied()
+            .flatten();
         self.push_value(value);
     }
 
@@ -185,14 +215,24 @@ impl Frame {
         self.stack_instanceof_facts.last().cloned().flatten()
     }
 
-    pub(crate) fn refine_local(&mut self, local: u16, reference: ReferenceType) {
-        let local = usize::from(local);
-        if let Some(value) = self.locals.get_mut(local)
-            && matches!(value, InferredType::Reference(_))
-        {
-            *value = InferredType::Reference(reference);
-            self.local_return_targets[local] = None;
+    pub(crate) fn refine_origin(&mut self, origin: ValueOrigin, reference: ReferenceType) {
+        for (index, value) in self.locals.iter_mut().enumerate() {
+            if self.local_value_origins.get(index).copied().flatten() == Some(origin)
+                && matches!(value, InferredType::Reference(_))
+            {
+                *value = InferredType::Reference(reference.clone());
+                self.local_return_targets[index] = None;
+            }
         }
+    }
+
+    pub(crate) fn top_value(&self) -> Option<FrameValue> {
+        self.stack.last().cloned().map(|value| FrameValue {
+            value,
+            return_targets: self.stack_return_targets.last().cloned().flatten(),
+            local_origin: self.stack_local_origins.last().copied().flatten(),
+            instanceof_fact: self.stack_instanceof_facts.last().cloned().flatten(),
+        })
     }
 
     pub(crate) fn replace_uninitialized(&mut self, allocation_offset: u16, class_name: ClassName) {
@@ -227,6 +267,7 @@ impl Frame {
                 None => ReferenceType::Exact(ClassName::java_lang_throwable()),
             })],
             local_return_targets: self.local_return_targets.clone(),
+            local_value_origins: self.local_value_origins.clone(),
             stack_return_targets: vec![None],
             stack_local_origins: vec![None],
             stack_instanceof_facts: vec![None],
@@ -243,6 +284,7 @@ impl Frame {
         let local_count = self.locals.len().max(incoming.locals.len());
         self.locals.resize(local_count, InferredType::Bottom);
         self.local_return_targets.resize(local_count, None);
+        self.local_value_origins.resize(local_count, None);
         for (index, value) in incoming.locals.iter().enumerate() {
             let existing = self.locals[index].clone();
             let merged = join_local_types(&self.locals[index], value, hierarchy);
@@ -258,6 +300,11 @@ impl Frame {
             );
             if merged != self.locals[index] {
                 self.locals[index] = merged;
+            }
+            if self.local_value_origins[index]
+                != incoming.local_value_origins.get(index).copied().flatten()
+            {
+                self.local_value_origins[index] = None;
             }
         }
 

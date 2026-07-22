@@ -133,7 +133,7 @@ fn store_local(
 ) {
     let value = pop_value(frame, method, instruction, diagnostics);
     let local = local_index(instruction, wide_opcode, short_base).unwrap_or_default();
-    frame.set_local_value(local, value);
+    frame.store_local_value(local, value, instruction.offset);
 }
 
 fn local_index(instruction: &InstructionIr, wide_opcode: u8, short_base: u8) -> Option<u16> {
@@ -469,7 +469,7 @@ fn instance_of(
     let fact = value
         .local_origin
         .zip(reference)
-        .map(|(local, reference)| InstanceOfFact { local, reference });
+        .map(|(origin, reference)| InstanceOfFact { origin, reference });
     frame.push_instanceof_result(fact);
 }
 

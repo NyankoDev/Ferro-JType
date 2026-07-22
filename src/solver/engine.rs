@@ -102,12 +102,10 @@ fn analyze_method(
 
         let block = &graph.blocks[block_id];
         let mut frame = incoming[&block_id].clone();
-        let mut terminator_instanceof_fact = None;
+        let mut terminator_branch_fact = None;
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
-            if is_instanceof_branch(instruction.opcode) {
-                terminator_instanceof_fact = before.top_instanceof_fact();
-            }
+            terminator_branch_fact = branch_fact(instruction.opcode, &before);
             transfer(method, instruction, &mut frame, &mut diagnostics);
             let mut propagation = Propagation {
                 method,
@@ -139,13 +137,14 @@ fn analyze_method(
 
         for edge in &block.successors {
             let mut outgoing = frame.clone();
-            if let Some(fact) = &terminator_instanceof_fact
-                && instanceof_true_edge(
-                    method.instructions[block.instruction_range.end - 1].opcode,
-                    &edge.kind,
-                )
+            let terminator = method.instructions[block.instruction_range.end - 1].opcode;
+            if !branch_edge_is_feasible(terminator, &edge.kind, terminator_branch_fact.as_ref()) {
+                continue;
+            }
+            if let Some(BranchFact::InstanceOf(fact)) = &terminator_branch_fact
+                && instanceof_true_edge(terminator, &edge.kind)
             {
-                outgoing.refine_local(fact.local, fact.reference.clone());
+                outgoing.refine_origin(fact.origin, fact.reference.clone());
             }
             let mut propagation = Propagation {
                 method,
@@ -203,8 +202,48 @@ fn analyze_method(
     )
 }
 
-const fn is_instanceof_branch(opcode: u8) -> bool {
-    matches!(opcode, 0x99 | 0x9a)
+#[derive(Debug, Clone)]
+enum BranchFact {
+    InstanceOf(crate::solver::frame::InstanceOfFact),
+    Null(bool),
+}
+
+fn branch_fact(opcode: u8, frame: &Frame) -> Option<BranchFact> {
+    match opcode {
+        0x99 | 0x9a => frame.top_instanceof_fact().map(BranchFact::InstanceOf),
+        0xc6 | 0xc7 => known_nullness(frame.top_value()?.value).map(BranchFact::Null),
+        _ => None,
+    }
+}
+
+fn known_nullness(value: InferredType) -> Option<bool> {
+    match value {
+        InferredType::Reference(ReferenceType::Null) => Some(true),
+        InferredType::Reference(ReferenceType::Exact(_) | ReferenceType::Array(_))
+        | InferredType::Uninitialized { .. }
+        | InferredType::UninitializedThis { .. } => Some(false),
+        InferredType::Bottom
+        | InferredType::Int
+        | InferredType::Float
+        | InferredType::Long
+        | InferredType::Double
+        | InferredType::Reference(ReferenceType::Unknown)
+        | InferredType::ReturnAddress
+        | InferredType::Alternatives(_)
+        | InferredType::Conflict => None,
+    }
+}
+
+fn branch_edge_is_feasible(opcode: u8, edge_kind: &EdgeKind, fact: Option<&BranchFact>) -> bool {
+    let Some(BranchFact::Null(is_null)) = fact else {
+        return true;
+    };
+    let branch_taken = matches!(edge_kind, EdgeKind::Branch);
+    match opcode {
+        0xc6 => branch_taken == *is_null,
+        0xc7 => branch_taken != *is_null,
+        _ => true,
+    }
 }
 
 const fn instanceof_true_edge(opcode: u8, edge_kind: &EdgeKind) -> bool {
