@@ -1,25 +1,20 @@
-use std::collections::BTreeMap;
-
 use ferro_babe::model::{
     ConstantPoolIndex, ConstantRef, InstructionOperand, LdcValueRef, MemberReference,
-    StackMapFrameKind, VerificationType,
 };
 use ferro_babe::{Class, Disassembler, RecoveryMode};
 
 use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
-    MethodIr, VerificationFrameIr,
+    MethodIr, strip_stack_map_tables,
 };
-use crate::{
-    ClassName, DescriptorError, Error, InferredType, MethodDescriptor, PrimitiveType,
-    ReferenceType, TypeDescriptor,
-};
+use crate::{ClassName, DescriptorError, Error, MethodDescriptor};
 
 pub(crate) fn parse_and_lower(bytes: &[u8]) -> Result<ClassIr, Error> {
+    let bytes = strip_stack_map_tables(bytes)?;
     let disassembler = Disassembler::builder()
         .recovery(RecoveryMode::BestEffort)
         .build();
-    let disassembly = disassembler.parse(bytes)?;
+    let disassembly = disassembler.parse(&bytes)?;
     let class = disassembly.class().ok_or(Error::IncompleteClass)?;
     lower_class(class)
 }
@@ -28,17 +23,13 @@ pub(crate) fn lower_class(class: &Class) -> Result<ClassIr, Error> {
     let name = parse_class_name(class.name())?;
     let methods = class
         .methods()
-        .map(|method| lower_method(class, &name, method))
+        .map(|method| lower_method(class, method))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(ClassIr { name, methods })
 }
 
-fn lower_method(
-    class: &Class,
-    owner: &ClassName,
-    method: ferro_babe::model::Method<'_>,
-) -> Result<MethodIr, Error> {
+fn lower_method(class: &Class, method: ferro_babe::model::Method<'_>) -> Result<MethodIr, Error> {
     let descriptor = MethodDescriptor::parse(method.descriptor())?;
     let instructions = method
         .instructions()
@@ -60,8 +51,6 @@ fn lower_method(
             })
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let verification_frames = lower_verification_frames(owner, method, &descriptor, &instructions);
-
     Ok(MethodIr {
         name: method.name().to_owned(),
         descriptor_text: method.descriptor().to_owned(),
@@ -71,170 +60,7 @@ fn lower_method(
         max_locals: method.max_locals(),
         instructions,
         exception_handlers,
-        verification_frames,
     })
-}
-
-fn lower_verification_frames(
-    owner: &ClassName,
-    method: ferro_babe::model::Method<'_>,
-    descriptor: &MethodDescriptor,
-    instructions: &[InstructionIr],
-) -> BTreeMap<u16, VerificationFrameIr> {
-    let Some(frames) = method.stack_map_frames() else {
-        return BTreeMap::new();
-    };
-
-    let mut locals = initial_verification_locals(owner, descriptor, method.access_flags());
-    let mut previous_offset = -1_i32;
-    let mut lowered = BTreeMap::new();
-
-    for frame in frames {
-        let offset = previous_offset + i32::from(frame.offset_delta()) + 1;
-        let Ok(offset) = u16::try_from(offset) else {
-            break;
-        };
-        previous_offset = i32::from(offset);
-
-        let stack = match frame.kind() {
-            StackMapFrameKind::Same | StackMapFrameKind::SameExtended => Vec::new(),
-            StackMapFrameKind::SameLocalsOneStackItem => {
-                verification_types(frame.stack(), owner, instructions)
-            }
-            StackMapFrameKind::Chop { count } => {
-                locals.truncate(locals.len().saturating_sub(usize::from(count)));
-                Vec::new()
-            }
-            StackMapFrameKind::Append => {
-                locals.extend(verification_types(frame.locals(), owner, instructions));
-                Vec::new()
-            }
-            StackMapFrameKind::Full => {
-                locals = verification_types(frame.locals(), owner, instructions);
-                verification_types(frame.stack(), owner, instructions)
-            }
-        };
-
-        lowered.insert(
-            offset,
-            VerificationFrameIr {
-                locals: expand_local_slots(&locals),
-                stack,
-            },
-        );
-    }
-
-    lowered
-}
-
-fn initial_verification_locals(
-    owner: &ClassName,
-    descriptor: &MethodDescriptor,
-    access_flags: u16,
-) -> Vec<InferredType> {
-    let mut locals = Vec::new();
-    if access_flags & 0x0008 == 0 {
-        locals.push(InferredType::Reference(ReferenceType::Exact(owner.clone())));
-    }
-    locals.extend(descriptor.parameters().iter().map(inferred_from_descriptor));
-    locals
-}
-
-fn verification_types(
-    values: Option<ferro_babe::model::VerificationTypes<'_>>,
-    owner: &ClassName,
-    instructions: &[InstructionIr],
-) -> Vec<InferredType> {
-    let Some(values) = values else {
-        return Vec::new();
-    };
-
-    values
-        .iter()
-        .map(|value| lower_verification_type(value, owner, instructions))
-        .collect()
-}
-
-fn lower_verification_type(
-    value: VerificationType<'_>,
-    owner: &ClassName,
-    instructions: &[InstructionIr],
-) -> InferredType {
-    match value {
-        VerificationType::Top => InferredType::Bottom,
-        VerificationType::Integer => InferredType::Int,
-        VerificationType::Float => InferredType::Float,
-        VerificationType::Long => InferredType::Long,
-        VerificationType::Double => InferredType::Double,
-        VerificationType::Null => InferredType::Reference(ReferenceType::Null),
-        VerificationType::UninitializedThis => {
-            InferredType::Reference(ReferenceType::Exact(owner.clone()))
-        }
-        VerificationType::Object { internal_name, .. } => internal_name
-            .and_then(reference_type_from_stack_map_name)
-            .map(InferredType::Reference)
-            .unwrap_or(InferredType::Reference(ReferenceType::Unknown)),
-        VerificationType::Uninitialized { offset } => instructions
-            .iter()
-            .find(|instruction| instruction.offset == offset && instruction.opcode == 0xbb)
-            .and_then(type_name_from_instruction)
-            .and_then(|name| ClassName::parse(name).ok())
-            .map(|class_name| InferredType::Uninitialized {
-                class_name,
-                allocation_offset: offset,
-            })
-            .unwrap_or(InferredType::Reference(ReferenceType::Unknown)),
-    }
-}
-
-fn reference_type_from_stack_map_name(name: &str) -> Option<ReferenceType> {
-    if name.starts_with('[') {
-        let descriptor = TypeDescriptor::parse(name).ok()?;
-        return matches!(descriptor, TypeDescriptor::Array { .. })
-            .then_some(ReferenceType::Array(descriptor));
-    }
-
-    ClassName::parse(name).ok().map(ReferenceType::Exact)
-}
-
-fn type_name_from_instruction(instruction: &InstructionIr) -> Option<&str> {
-    match &instruction.operand {
-        InstructionOperandIr::Type { type_name, .. }
-        | InstructionOperandIr::MultiArray { type_name, .. } => type_name.as_deref(),
-        _ => None,
-    }
-}
-
-fn expand_local_slots(values: &[InferredType]) -> Vec<InferredType> {
-    let mut slots = Vec::with_capacity(values.len());
-    for value in values {
-        slots.push(value.clone());
-        if matches!(value, InferredType::Long | InferredType::Double) {
-            slots.push(InferredType::Bottom);
-        }
-    }
-    slots
-}
-
-fn inferred_from_descriptor(descriptor: &TypeDescriptor) -> InferredType {
-    match descriptor {
-        TypeDescriptor::Primitive(primitive) => match primitive {
-            PrimitiveType::Long => InferredType::Long,
-            PrimitiveType::Float => InferredType::Float,
-            PrimitiveType::Double => InferredType::Double,
-            PrimitiveType::Boolean
-            | PrimitiveType::Byte
-            | PrimitiveType::Char
-            | PrimitiveType::Short
-            | PrimitiveType::Int => InferredType::Int,
-        },
-        TypeDescriptor::Reference(class_name) => {
-            InferredType::Reference(ReferenceType::Exact(class_name.clone()))
-        }
-        TypeDescriptor::Array { .. } => {
-            InferredType::Reference(ReferenceType::Array(descriptor.clone()))
-        }
-    }
 }
 
 fn lower_instruction(

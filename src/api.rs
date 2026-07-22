@@ -117,7 +117,8 @@ impl Inferer {
     /// Infers types from one complete Java class file.
     ///
     /// The analysis works from the supplied class-file bytes and does not load
-    /// JDK symbols or resolve an external class hierarchy.
+    /// JDK symbols or resolve an external class hierarchy. `StackMapTable` is
+    /// ignored so missing or forged verification frames cannot affect results.
     pub fn infer_class(&self, bytes: &[u8]) -> Result<ClassInference, Error> {
         let class = parse_and_lower(bytes)?;
         analyze_class(&class, &self.config)

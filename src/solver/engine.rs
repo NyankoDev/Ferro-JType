@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::cfg::{EdgeKind, build_cfg};
-use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr, VerificationFrameIr};
+use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::{
@@ -49,7 +49,7 @@ fn analyze_method(
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
     let mut diagnostics = cfg_result.diagnostics;
-    let mut entry_frame = Frame::entry(
+    let entry_frame = Frame::entry(
         owner,
         &method.descriptor,
         method.access_flags,
@@ -75,13 +75,6 @@ fn analyze_method(
             diagnostics,
         );
     };
-
-    if let Some(verification) = method
-        .verification_frames
-        .get(&graph.blocks[entry].start_offset)
-    {
-        entry_frame.apply_verification_frame(verification);
-    }
 
     let mut incoming = HashMap::from([(entry, entry_frame.clone())]);
     let mut worklist = VecDeque::from([entry]);
@@ -141,9 +134,6 @@ fn analyze_method(
                 &mut incoming,
                 edge.target,
                 outgoing,
-                method
-                    .verification_frames
-                    .get(&graph.blocks[edge.target].start_offset),
                 method,
                 block.start_offset,
                 &mut diagnostics,
@@ -173,25 +163,17 @@ fn merge_frame(
     incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
     target: crate::cfg::BlockId,
     outgoing: Frame,
-    verification: Option<&VerificationFrameIr>,
     method: &MethodIr,
     offset: u16,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
     let Some(existing) = incoming.get_mut(&target) else {
-        let mut incoming_frame = outgoing;
-        if let Some(verification) = verification {
-            incoming_frame.apply_verification_frame(verification);
-        }
-        incoming.insert(target, incoming_frame);
+        incoming.insert(target, outgoing);
         return true;
     };
 
     let previous = existing.clone();
     let outcome = existing.merge_from(&outgoing);
-    if let Some(verification) = verification {
-        existing.apply_verification_frame(verification);
-    }
     if outcome.stack_height_mismatch {
         diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
@@ -215,15 +197,6 @@ fn collect_local_types(
     }
     for observation in observations.values() {
         merge_locals(&mut locals, observation.local_types());
-    }
-    let mut verification_locals = Vec::new();
-    for frame in method.verification_frames.values() {
-        merge_locals(&mut verification_locals, &frame.locals);
-    }
-    for (local, verification) in locals.iter_mut().zip(&verification_locals) {
-        if !matches!(verification, InferredType::Bottom) {
-            *local = verification.clone();
-        }
     }
     refine_catch_local_types(&mut locals, incoming, observations, method);
     locals

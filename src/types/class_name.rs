@@ -13,6 +13,10 @@ impl ClassName {
         Self("java/lang/String".to_owned())
     }
 
+    pub(crate) fn java_lang_object() -> Self {
+        Self("java/lang/Object".to_owned())
+    }
+
     pub(crate) fn java_lang_throwable() -> Self {
         Self("java/lang/Throwable".to_owned())
     }

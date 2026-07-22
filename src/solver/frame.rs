@@ -1,4 +1,3 @@
-use crate::ir::VerificationFrameIr;
 use crate::{ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,18 +84,9 @@ impl Frame {
             locals: self.locals.clone(),
             stack: vec![InferredType::Reference(match catch_type {
                 Some(class_name) => ReferenceType::Exact(class_name),
-                None => ReferenceType::Unknown,
+                None => ReferenceType::Exact(ClassName::java_lang_throwable()),
             })],
         }
-    }
-
-    pub(crate) fn apply_verification_frame(&mut self, verification: &VerificationFrameIr) {
-        if self.locals == verification.locals && self.stack == verification.stack {
-            return;
-        }
-
-        self.locals.clone_from(&verification.locals);
-        self.stack.clone_from(&verification.stack);
     }
 
     pub(crate) fn merge_from(&mut self, incoming: &Self) -> MergeOutcome {

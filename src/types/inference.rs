@@ -2,8 +2,9 @@ use crate::{ClassName, TypeDescriptor};
 
 /// Inferred state for a JVM reference value.
 ///
-/// Without an external class hierarchy, references with incompatible exact
-/// classes merge conservatively to [`Self::Unknown`].
+/// Without an external class hierarchy, incompatible known references merge
+/// to `java/lang/Object`. [`Self::Unknown`] is reserved for values whose class
+/// bytes do not supply enough information to establish a reference type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReferenceType {
     /// A reference known to have exactly this runtime class.
@@ -29,7 +30,7 @@ impl ReferenceType {
             (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
             (Self::Exact(left), Self::Exact(right)) if left == right => Self::Exact(left.clone()),
             (Self::Array(left), Self::Array(right)) if left == right => Self::Array(left.clone()),
-            _ => Self::Unknown,
+            _ => Self::Exact(ClassName::java_lang_object()),
         }
     }
 }

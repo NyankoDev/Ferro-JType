@@ -62,6 +62,12 @@ pub enum Error {
     /// Recovery produced an incomplete class representation.
     #[error("class file recovery did not produce a complete class")]
     IncompleteClass,
+    /// The class-file structure could not be traversed safely before inference.
+    #[error("invalid class-file structure: {message}")]
+    InvalidClassFile {
+        /// Explanation of the malformed structure.
+        message: String,
+    },
     /// A descriptor embedded in the class file was invalid.
     #[error(transparent)]
     Descriptor(#[from] DescriptorError),
