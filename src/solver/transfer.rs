@@ -50,15 +50,13 @@ pub(crate) fn transfer(
         0x3a | 0x4b..=0x4e => store_local(instruction, frame, 0x3a, 0x4b, method, diagnostics),
         0x4f..=0x56 => array_store(frame, method, instruction, diagnostics),
         0x57 => discard(frame, method, instruction, diagnostics),
-        0x58 => {
-            discard(frame, method, instruction, diagnostics);
-            discard(frame, method, instruction, diagnostics);
-        }
+        0x58 => discard_two_slots(frame, method, instruction, diagnostics),
         0x59 => duplicate_top(frame, method, instruction, diagnostics),
         0x5a => duplicate_x1(frame, method, instruction, diagnostics),
         0x5b => duplicate_x2(frame, method, instruction, diagnostics),
         0x5c => duplicate_two(frame, method, instruction, diagnostics),
-        0x5d | 0x5e => duplicate_two_over(frame, method, instruction, diagnostics),
+        0x5d => duplicate_two_x1(frame, method, instruction, diagnostics),
+        0x5e => duplicate_two_x2(frame, method, instruction, diagnostics),
         0x5f => swap(frame, method, instruction, diagnostics),
         0x60 | 0x64 | 0x68 | 0x6c | 0x70 | 0x78 | 0x7a | 0x7c | 0x7e | 0x80 | 0x82 => {
             binary(frame, InferredType::Int, method, instruction, diagnostics)
@@ -403,11 +401,12 @@ fn allocate_reference_array(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     discard(frame, method, instruction, diagnostics);
-    frame.push(InferredType::Reference(ReferenceType::Array(
-        type_name(instruction)
-            .and_then(array_element_descriptor)
-            .unwrap_or_else(|| TypeDescriptor::Reference(unknown_class_name())),
-    )));
+    let reference = type_name(instruction)
+        .and_then(array_element_descriptor)
+        .and_then(array_of)
+        .map(ReferenceType::Array)
+        .unwrap_or(ReferenceType::Unknown);
+    frame.push(InferredType::Reference(reference));
 }
 
 fn cast_reference(
@@ -443,7 +442,10 @@ fn allocate_multi_array(
     }
     let reference = type_name(instruction)
         .and_then(|name| TypeDescriptor::parse(name).ok())
-        .map(ReferenceType::Array)
+        .and_then(|descriptor| match descriptor {
+            descriptor @ TypeDescriptor::Array { .. } => Some(ReferenceType::Array(descriptor)),
+            TypeDescriptor::Primitive(_) | TypeDescriptor::Reference(_) => None,
+        })
         .unwrap_or(ReferenceType::Unknown);
     frame.push(InferredType::Reference(reference));
 }
@@ -461,16 +463,28 @@ fn array_element_descriptor(name: &str) -> Option<TypeDescriptor> {
         .or_else(|| ClassName::parse(name).ok().map(TypeDescriptor::Reference))
 }
 
+fn array_of(component: TypeDescriptor) -> Option<TypeDescriptor> {
+    match component {
+        TypeDescriptor::Array {
+            dimensions,
+            element,
+        } => Some(TypeDescriptor::Array {
+            dimensions: dimensions.checked_add(1)?,
+            element,
+        }),
+        element => Some(TypeDescriptor::Array {
+            dimensions: 1,
+            element: Box::new(element),
+        }),
+    }
+}
+
 fn reference_descriptor(name: &str) -> Option<TypeDescriptor> {
     if name.starts_with('[') {
         TypeDescriptor::parse(name).ok()
     } else {
         ClassName::parse(name).ok().map(TypeDescriptor::Reference)
     }
-}
-
-fn unknown_class_name() -> ClassName {
-    ClassName::parse("<unknown>").expect("static internal name is valid")
 }
 
 fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
@@ -496,6 +510,18 @@ fn discard(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let _ = pop(frame, method, instruction, diagnostics);
+}
+
+fn discard_two_slots(
+    frame: &mut Frame,
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let top = pop(frame, method, instruction, diagnostics);
+    if !is_category_two(&top) {
+        discard(frame, method, instruction, diagnostics);
+    }
 }
 
 fn pop(
@@ -547,11 +573,17 @@ fn duplicate_x2(
 ) {
     let first = pop(frame, method, instruction, diagnostics);
     let second = pop(frame, method, instruction, diagnostics);
-    let third = pop(frame, method, instruction, diagnostics);
-    frame.push(first.clone());
-    frame.push(third);
-    frame.push(second);
-    frame.push(first);
+    if is_category_two(&second) {
+        frame.push(first.clone());
+        frame.push(second);
+        frame.push(first);
+    } else {
+        let third = pop(frame, method, instruction, diagnostics);
+        frame.push(first.clone());
+        frame.push(third);
+        frame.push(second);
+        frame.push(first);
+    }
 }
 
 fn duplicate_two(
@@ -561,14 +593,19 @@ fn duplicate_two(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    frame.push(second.clone());
-    frame.push(first.clone());
-    frame.push(second);
-    frame.push(first);
+    if is_category_two(&first) {
+        frame.push(first.clone());
+        frame.push(first);
+    } else {
+        let second = pop(frame, method, instruction, diagnostics);
+        frame.push(second.clone());
+        frame.push(first.clone());
+        frame.push(second);
+        frame.push(first);
+    }
 }
 
-fn duplicate_two_over(
+fn duplicate_two_x1(
     frame: &mut Frame,
     method: &MethodIr,
     instruction: &InstructionIr,
@@ -576,12 +613,56 @@ fn duplicate_two_over(
 ) {
     let first = pop(frame, method, instruction, diagnostics);
     let second = pop(frame, method, instruction, diagnostics);
-    let third = pop(frame, method, instruction, diagnostics);
-    frame.push(second.clone());
-    frame.push(first.clone());
-    frame.push(third);
-    frame.push(second);
-    frame.push(first);
+    if is_category_two(&first) {
+        frame.push(first.clone());
+        frame.push(second);
+        frame.push(first);
+    } else {
+        let third = pop(frame, method, instruction, diagnostics);
+        frame.push(second.clone());
+        frame.push(first.clone());
+        frame.push(third);
+        frame.push(second);
+        frame.push(first);
+    }
+}
+
+fn duplicate_two_x2(
+    frame: &mut Frame,
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let first = pop(frame, method, instruction, diagnostics);
+    let second = pop(frame, method, instruction, diagnostics);
+    if is_category_two(&first) && is_category_two(&second) {
+        frame.push(first.clone());
+        frame.push(second);
+        frame.push(first);
+    } else if is_category_two(&first) {
+        let third = pop(frame, method, instruction, diagnostics);
+        frame.push(first.clone());
+        frame.push(third);
+        frame.push(second);
+        frame.push(first);
+    } else {
+        let third = pop(frame, method, instruction, diagnostics);
+        if is_category_two(&third) {
+            frame.push(second.clone());
+            frame.push(first.clone());
+            frame.push(third);
+            frame.push(second);
+            frame.push(first);
+        } else {
+            let fourth = pop(frame, method, instruction, diagnostics);
+            frame.push(second.clone());
+            frame.push(first.clone());
+            frame.push(fourth);
+            frame.push(third);
+            frame.push(second);
+            frame.push(first);
+        }
+    }
 }
 
 fn swap(
@@ -637,4 +718,8 @@ fn operand_details(operand: &InstructionOperandIr) -> String {
 
 fn location(method: &MethodIr, offset: u16) -> DiagnosticLocation {
     DiagnosticLocation::method(&method.name, &method.descriptor_text).at_offset(offset)
+}
+
+const fn is_category_two(value: &InferredType) -> bool {
+    matches!(value, InferredType::Long | InferredType::Double)
 }

@@ -27,7 +27,7 @@ pub(crate) fn analyze_class(
     if config.strict()
         && let Some(diagnostic) = diagnostics
             .iter()
-            .find(|diagnostic| diagnostic.severity() == DiagnosticSeverity::Error)
+            .find(|diagnostic| diagnostic.severity() != DiagnosticSeverity::Note)
     {
         return Err(Error::StrictAnalysis {
             message: diagnostic.message().to_owned(),
