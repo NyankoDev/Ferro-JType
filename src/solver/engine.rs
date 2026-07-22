@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::cfg::{EdgeKind, build_cfg};
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
+use crate::result::MethodHeader;
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::types::join_local_types;
@@ -70,10 +71,13 @@ fn analyze_method(
         return (
             MethodInference::new(
                 method.name.clone(),
-                method.descriptor.clone(),
-                method.generic_signature.clone(),
-                parameter_types,
-                method.descriptor.return_type().clone(),
+                MethodHeader {
+                    descriptor: method.descriptor.clone(),
+                    generic_signature: method.generic_signature.clone(),
+                    analysis_complete: true,
+                    parameter_types,
+                    return_type: method.descriptor.return_type().clone(),
+                },
                 entry_frame.locals,
                 Vec::new(),
             ),
@@ -85,11 +89,13 @@ fn analyze_method(
     let mut worklist = VecDeque::from([entry]);
     let mut visits = HashMap::new();
     let mut total_work_items = 0_usize;
+    let mut analysis_complete = true;
 
     while let Some(block_id) = worklist.pop_front() {
         total_work_items += 1;
         if total_work_items > config.max_work_items() {
             diagnostics.push(limit_diagnostic(method, "work-item budget"));
+            analysis_complete = false;
             break;
         }
 
@@ -97,6 +103,7 @@ fn analyze_method(
         *visits_for_block += 1;
         if *visits_for_block > config.max_block_iterations() {
             diagnostics.push(limit_diagnostic(method, "per-block iteration budget"));
+            analysis_complete = false;
             continue;
         }
 
@@ -191,10 +198,13 @@ fn analyze_method(
     (
         MethodInference::new(
             method.name.clone(),
-            method.descriptor.clone(),
-            method.generic_signature.clone(),
-            parameter_types,
-            method.descriptor.return_type().clone(),
+            MethodHeader {
+                descriptor: method.descriptor.clone(),
+                generic_signature: method.generic_signature.clone(),
+                analysis_complete,
+                parameter_types,
+                return_type: method.descriptor.return_type().clone(),
+            },
             local_types,
             instructions,
         ),

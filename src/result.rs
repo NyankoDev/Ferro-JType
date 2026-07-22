@@ -54,6 +54,15 @@ impl ClassInference {
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
+
+    /// Returns whether every method reached a fixed point within configured limits.
+    ///
+    /// This does not hide instruction-level diagnostics; inspect
+    /// [`Self::diagnostics`] for unsupported or malformed bytecode details.
+    #[must_use]
+    pub fn analysis_complete(&self) -> bool {
+        self.methods.iter().all(MethodInference::analysis_complete)
+    }
 }
 
 /// Type-inference results for one method.
@@ -65,28 +74,35 @@ pub struct MethodInference {
     name: String,
     descriptor: MethodDescriptor,
     generic_signature: Option<GenericSignature>,
+    analysis_complete: bool,
     parameter_types: Vec<InferredType>,
     return_type: ReturnType,
     local_types: Vec<InferredType>,
     instructions: Vec<InstructionInference>,
 }
 
+pub(crate) struct MethodHeader {
+    pub(crate) descriptor: MethodDescriptor,
+    pub(crate) generic_signature: Option<GenericSignature>,
+    pub(crate) analysis_complete: bool,
+    pub(crate) parameter_types: Vec<InferredType>,
+    pub(crate) return_type: ReturnType,
+}
+
 impl MethodInference {
     pub(crate) fn new(
         name: String,
-        descriptor: MethodDescriptor,
-        generic_signature: Option<GenericSignature>,
-        parameter_types: Vec<InferredType>,
-        return_type: ReturnType,
+        header: MethodHeader,
         local_types: Vec<InferredType>,
         instructions: Vec<InstructionInference>,
     ) -> Self {
         Self {
             name,
-            descriptor,
-            generic_signature,
-            parameter_types,
-            return_type,
+            descriptor: header.descriptor,
+            generic_signature: header.generic_signature,
+            analysis_complete: header.analysis_complete,
+            parameter_types: header.parameter_types,
+            return_type: header.return_type,
             local_types,
             instructions,
         }
@@ -108,6 +124,12 @@ impl MethodInference {
     #[must_use]
     pub const fn generic_signature(&self) -> Option<&GenericSignature> {
         self.generic_signature.as_ref()
+    }
+
+    /// Returns whether analysis reached a fixed point within configured limits.
+    #[must_use]
+    pub const fn analysis_complete(&self) -> bool {
+        self.analysis_complete
     }
 
     /// Returns the descriptor-derived parameter types in declaration order.
