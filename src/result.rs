@@ -1,4 +1,4 @@
-use crate::{ClassName, Diagnostic, InferredType, MethodDescriptor, ReturnType};
+use crate::{ClassName, Diagnostic, GenericSignature, InferredType, MethodDescriptor, ReturnType};
 
 /// Type-inference results for one Java class file.
 ///
@@ -8,6 +8,7 @@ use crate::{ClassName, Diagnostic, InferredType, MethodDescriptor, ReturnType};
 #[derive(Debug, Clone)]
 pub struct ClassInference {
     class_name: ClassName,
+    generic_signature: Option<GenericSignature>,
     methods: Vec<MethodInference>,
     diagnostics: Vec<Diagnostic>,
 }
@@ -15,11 +16,13 @@ pub struct ClassInference {
 impl ClassInference {
     pub(crate) fn new(
         class_name: ClassName,
+        generic_signature: Option<GenericSignature>,
         methods: Vec<MethodInference>,
         diagnostics: Vec<Diagnostic>,
     ) -> Self {
         Self {
             class_name,
+            generic_signature,
             methods,
             diagnostics,
         }
@@ -29,6 +32,12 @@ impl ClassInference {
     #[must_use]
     pub const fn class_name(&self) -> &ClassName {
         &self.class_name
+    }
+
+    /// Returns the class's generic `Signature` attribute, when present.
+    #[must_use]
+    pub const fn generic_signature(&self) -> Option<&GenericSignature> {
+        self.generic_signature.as_ref()
     }
 
     /// Returns one inference result for each method in the class file.
@@ -52,6 +61,7 @@ impl ClassInference {
 pub struct MethodInference {
     name: String,
     descriptor: MethodDescriptor,
+    generic_signature: Option<GenericSignature>,
     parameter_types: Vec<InferredType>,
     return_type: ReturnType,
     local_types: Vec<InferredType>,
@@ -62,6 +72,7 @@ impl MethodInference {
     pub(crate) fn new(
         name: String,
         descriptor: MethodDescriptor,
+        generic_signature: Option<GenericSignature>,
         parameter_types: Vec<InferredType>,
         return_type: ReturnType,
         local_types: Vec<InferredType>,
@@ -70,6 +81,7 @@ impl MethodInference {
         Self {
             name,
             descriptor,
+            generic_signature,
             parameter_types,
             return_type,
             local_types,
@@ -87,6 +99,12 @@ impl MethodInference {
     #[must_use]
     pub const fn descriptor(&self) -> &MethodDescriptor {
         &self.descriptor
+    }
+
+    /// Returns the method's generic `Signature` attribute, when present.
+    #[must_use]
+    pub const fn generic_signature(&self) -> Option<&GenericSignature> {
+        self.generic_signature.as_ref()
     }
 
     /// Returns the descriptor-derived parameter types in declaration order.

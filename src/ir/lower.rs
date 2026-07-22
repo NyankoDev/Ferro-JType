@@ -1,35 +1,53 @@
+use std::collections::BTreeMap;
+
 use ferro_babe::model::{
     ConstantPoolIndex, ConstantRef, InstructionOperand, LdcValueRef, MemberReference,
 };
 use ferro_babe::{Class, Disassembler, RecoveryMode};
+use rust_asm::class_reader::{AttributeInfo, read_class_file};
 
 use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
     MethodIr, strip_stack_map_tables,
 };
-use crate::{ClassName, DescriptorError, Error, MethodDescriptor};
+use crate::{ClassName, DescriptorError, Error, GenericSignature, MethodDescriptor};
 
 pub(crate) fn parse_and_lower(bytes: &[u8]) -> Result<ClassIr, Error> {
     let bytes = strip_stack_map_tables(bytes)?;
+    let generic_metadata = extract_generic_metadata(&bytes);
     let disassembler = Disassembler::builder()
         .recovery(RecoveryMode::BestEffort)
         .build();
     let disassembly = disassembler.parse(&bytes)?;
     let class = disassembly.class().ok_or(Error::IncompleteClass)?;
-    lower_class(class)
+    lower_class(class, &generic_metadata)
 }
 
-pub(crate) fn lower_class(class: &Class) -> Result<ClassIr, Error> {
+fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<ClassIr, Error> {
     let name = parse_class_name(class.name())?;
     let methods = class
         .methods()
-        .map(|method| lower_method(class, method))
+        .map(|method| {
+            let generic_signature = generic_metadata
+                .method_signatures
+                .get(&(method.name().to_owned(), method.descriptor().to_owned()))
+                .cloned();
+            lower_method(class, method, generic_signature)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(ClassIr { name, methods })
+    Ok(ClassIr {
+        name,
+        generic_signature: generic_metadata.class_signature.clone(),
+        methods,
+    })
 }
 
-fn lower_method(class: &Class, method: ferro_babe::model::Method<'_>) -> Result<MethodIr, Error> {
+fn lower_method(
+    class: &Class,
+    method: ferro_babe::model::Method<'_>,
+    generic_signature: Option<GenericSignature>,
+) -> Result<MethodIr, Error> {
     let descriptor = MethodDescriptor::parse(method.descriptor())?;
     let instructions = method
         .instructions()
@@ -55,12 +73,57 @@ fn lower_method(class: &Class, method: ferro_babe::model::Method<'_>) -> Result<
         name: method.name().to_owned(),
         descriptor_text: method.descriptor().to_owned(),
         descriptor,
+        generic_signature,
         access_flags: method.access_flags(),
         max_stack: method.max_stack(),
         max_locals: method.max_locals(),
         instructions,
         exception_handlers,
     })
+}
+
+#[derive(Default)]
+struct GenericMetadata {
+    class_signature: Option<GenericSignature>,
+    method_signatures: BTreeMap<(String, String), GenericSignature>,
+}
+
+fn extract_generic_metadata(bytes: &[u8]) -> GenericMetadata {
+    let Ok(class_file) = read_class_file(bytes) else {
+        return GenericMetadata::default();
+    };
+    let class_signature = signature_from_attributes(&class_file, &class_file.attributes);
+    let method_signatures = class_file
+        .methods
+        .iter()
+        .filter_map(|method| {
+            let signature = signature_from_attributes(&class_file, &method.attributes)?;
+            let name = class_file.cp_utf8(method.name_index).ok()?.to_owned();
+            let descriptor = class_file.cp_utf8(method.descriptor_index).ok()?.to_owned();
+            Some(((name, descriptor), signature))
+        })
+        .collect();
+    GenericMetadata {
+        class_signature,
+        method_signatures,
+    }
+}
+
+fn signature_from_attributes(
+    class_file: &rust_asm::class_reader::ClassFile,
+    attributes: &[AttributeInfo],
+) -> Option<GenericSignature> {
+    let AttributeInfo::Signature { signature_index } = attributes
+        .iter()
+        .find(|attribute| matches!(attribute, AttributeInfo::Signature { .. }))?
+    else {
+        return None;
+    };
+    class_file
+        .cp_utf8(*signature_index)
+        .ok()
+        .map(str::to_owned)
+        .map(GenericSignature::new)
 }
 
 fn lower_instruction(

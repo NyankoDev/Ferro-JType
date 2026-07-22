@@ -1,8 +1,9 @@
-use crate::{ClassName, MethodDescriptor};
+use crate::{ClassName, GenericSignature, MethodDescriptor};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
     pub(crate) name: ClassName,
+    pub(crate) generic_signature: Option<GenericSignature>,
     pub(crate) methods: Vec<MethodIr>,
 }
 
@@ -11,6 +12,7 @@ pub(crate) struct MethodIr {
     pub(crate) name: String,
     pub(crate) descriptor_text: String,
     pub(crate) descriptor: MethodDescriptor,
+    pub(crate) generic_signature: Option<GenericSignature>,
     pub(crate) access_flags: u16,
     pub(crate) max_stack: u16,
     pub(crate) max_locals: u16,

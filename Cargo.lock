@@ -18,6 +18,7 @@ version = "0.1.6"
 dependencies = [
  "FerroBabe",
  "la-arena",
+ "rust-asm",
  "thiserror",
 ]
 

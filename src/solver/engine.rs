@@ -37,6 +37,7 @@ pub(crate) fn analyze_class(
 
     Ok(ClassInference::new(
         class.name.clone(),
+        class.generic_signature.clone(),
         methods,
         diagnostics,
     ))
@@ -70,6 +71,7 @@ fn analyze_method(
             MethodInference::new(
                 method.name.clone(),
                 method.descriptor.clone(),
+                method.generic_signature.clone(),
                 parameter_types,
                 method.descriptor.return_type().clone(),
                 entry_frame.locals,
@@ -191,6 +193,7 @@ fn analyze_method(
         MethodInference::new(
             method.name.clone(),
             method.descriptor.clone(),
+            method.generic_signature.clone(),
             parameter_types,
             method.descriptor.return_type().clone(),
             local_types,
