@@ -266,7 +266,9 @@ fn lower_instruction(
             constant_pool_index: call_site.get(),
         },
         InstructionOperand::Branch { target, .. } => InstructionOperandIr::Branch { target },
-        InstructionOperand::Ldc(value) => InstructionOperandIr::Constant(lower_constant(value)),
+        InstructionOperand::Ldc(value) => {
+            InstructionOperandIr::Constant(lower_constant(class, value))
+        }
         InstructionOperand::Increment { local, amount } => {
             InstructionOperandIr::Increment { local, amount }
         }
@@ -403,7 +405,7 @@ fn resolve_utf8(class: &Class, index: ConstantPoolIndex) -> Option<&str> {
     Some(value)
 }
 
-fn lower_constant(value: LdcValueRef<'_>) -> ConstantKind {
+fn lower_constant(class: &Class, value: LdcValueRef<'_>) -> ConstantKind {
     match value {
         LdcValueRef::Integer(_) => ConstantKind::Integer,
         LdcValueRef::Float(_) => ConstantKind::Float,
@@ -411,7 +413,33 @@ fn lower_constant(value: LdcValueRef<'_>) -> ConstantKind {
         LdcValueRef::Double(_) => ConstantKind::Double,
         LdcValueRef::String(_) => ConstantKind::String,
         LdcValueRef::TypeDescriptor => ConstantKind::Type,
-        LdcValueRef::ConstantPool(_) => ConstantKind::Unresolved,
+        LdcValueRef::ConstantPool(index) => lower_constant_pool(class, index),
+    }
+}
+
+fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind {
+    match class.constant(index) {
+        Some(ConstantRef::Integer(_)) => ConstantKind::Integer,
+        Some(ConstantRef::Float(_)) => ConstantKind::Float,
+        Some(ConstantRef::Long(_)) => ConstantKind::Long,
+        Some(ConstantRef::Double(_)) => ConstantKind::Double,
+        Some(ConstantRef::String { .. }) => ConstantKind::String,
+        Some(ConstantRef::Class { .. }) => ConstantKind::Type,
+        Some(
+            ConstantRef::Unusable
+            | ConstantRef::Utf8(_)
+            | ConstantRef::FieldReference { .. }
+            | ConstantRef::MethodReference { .. }
+            | ConstantRef::InterfaceMethodReference { .. }
+            | ConstantRef::NameAndType { .. }
+            | ConstantRef::MethodHandle { .. }
+            | ConstantRef::MethodType { .. }
+            | ConstantRef::Dynamic { .. }
+            | ConstantRef::InvokeDynamic { .. }
+            | ConstantRef::Module { .. }
+            | ConstantRef::Package { .. },
+        )
+        | None => ConstantKind::Unresolved,
     }
 }
 

@@ -9,6 +9,10 @@ use crate::NameError;
 pub struct ClassName(String);
 
 impl ClassName {
+    pub(crate) fn java_lang_string() -> Self {
+        Self("java/lang/String".to_owned())
+    }
+
     /// Parses and validates a JVM internal class name.
     ///
     /// Empty names and descriptor-only punctuation are rejected. The value is

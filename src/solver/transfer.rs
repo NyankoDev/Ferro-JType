@@ -494,8 +494,10 @@ fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
         InstructionOperandIr::Constant(ConstantKind::Float) => InferredType::Float,
         InstructionOperandIr::Constant(ConstantKind::Long) => InferredType::Long,
         InstructionOperandIr::Constant(ConstantKind::Double) => InferredType::Double,
-        InstructionOperandIr::Constant(ConstantKind::String)
-        | InstructionOperandIr::Constant(ConstantKind::Type)
+        InstructionOperandIr::Constant(ConstantKind::String) => {
+            InferredType::Reference(ReferenceType::Exact(ClassName::java_lang_string()))
+        }
+        InstructionOperandIr::Constant(ConstantKind::Type)
         | InstructionOperandIr::Constant(ConstantKind::Unresolved) => {
             InferredType::Reference(ReferenceType::Unknown)
         }
