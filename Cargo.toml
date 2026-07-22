@@ -1,6 +1,6 @@
 [package]
 name = "ferro-jtype"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Eatgrapes"]
 description = "Type inference for Java class bytecode without JDK symbols"
 license = "MIT"
