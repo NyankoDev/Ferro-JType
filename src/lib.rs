@@ -29,6 +29,6 @@ pub use hierarchy::{ClassHierarchy, TypeHierarchy};
 pub use result::{ClassInference, InstructionInference, MethodInference};
 pub use summary::{FieldSummaries, FieldSummaryResolver, MethodSummaries, MethodSummaryResolver};
 pub use types::{
-    ClassName, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor, PrimitiveType,
-    ReferenceType, ReturnType, TypeDescriptor,
+    ClassName, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor,
+    MethodInvocationKind, PrimitiveType, ReferenceType, ReturnType, TypeDescriptor,
 };

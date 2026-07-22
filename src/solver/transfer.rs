@@ -2,8 +2,8 @@ use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, 
 use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
 use crate::summary::{FieldSummaryResolver, MethodSummaryResolver, value_type_matches_descriptor};
 use crate::{
-    ClassName, Diagnostic, InferredType, MethodDescriptor, ReferenceType, ReturnType,
-    TypeDescriptor,
+    ClassName, Diagnostic, InferredType, MethodDescriptor, MethodInvocationKind, ReferenceType,
+    ReturnType, TypeDescriptor,
 };
 
 pub(crate) fn transfer(
@@ -328,7 +328,11 @@ fn invoke_member(
     }
 
     let summary_return_type =
-        member.and_then(|member| resolve_method_summary(member, &descriptor, method_summaries));
+        MethodInvocationKind::from_opcode(instruction.opcode).and_then(|invocation_kind| {
+            member.and_then(|member| {
+                resolve_method_summary(member, &descriptor, method_summaries, invocation_kind)
+            })
+        });
     push_return_type(&descriptor, summary_return_type, frame);
 }
 
@@ -384,11 +388,13 @@ fn resolve_method_summary(
     member: &MemberRefIr,
     descriptor: &MethodDescriptor,
     method_summaries: Option<&dyn MethodSummaryResolver>,
+    invocation_kind: MethodInvocationKind,
 ) -> Option<InferredType> {
     let MemberRefIr::Resolved { owner, name, .. } = member else {
         return None;
     };
-    let return_type = method_summaries?.return_type(owner, name, descriptor)?;
+    let return_type =
+        method_summaries?.return_type_for_invocation(owner, name, descriptor, invocation_kind)?;
     method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
 }
 

@@ -4,7 +4,7 @@ use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MemberRefIr, Metho
 use crate::{
     ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
     Error, FieldSummaries, InferenceConfig, InferredType, MethodDescriptor, MethodInference,
-    MethodSummaries, MethodSummaryResolver,
+    MethodInvocationKind, MethodSummaries, MethodSummaryResolver,
 };
 
 use super::engine::analyze_method;
@@ -16,7 +16,8 @@ pub(crate) fn analyze_class(
     class: &ClassIr,
     config: &InferenceConfig,
 ) -> Result<ClassInference, Error> {
-    let callers = local_summary_callers(class);
+    let method_indices = local_method_indices(class);
+    let callers = local_summary_callers(class, &method_indices);
     let field_readers = local_field_readers(class);
     let mut summaries = MethodSummaries::new();
     let mut field_summaries = FieldSummaries::new();
@@ -42,6 +43,9 @@ pub(crate) fn analyze_class(
             let method_resolver = ClassSummaryResolver {
                 external: config.method_summaries(),
                 local: &summaries,
+                owner: &class.name,
+                methods: &class.methods,
+                method_indices: &method_indices,
             };
             let field_resolver =
                 StaticFieldResolver::new(config.field_summaries(), &field_summaries);
@@ -127,6 +131,9 @@ pub(crate) fn analyze_class(
 struct ClassSummaryResolver<'a> {
     external: Option<&'a dyn MethodSummaryResolver>,
     local: &'a MethodSummaries,
+    owner: &'a ClassName,
+    methods: &'a [MethodIr],
+    method_indices: &'a HashMap<MethodKey, usize>,
 }
 
 impl MethodSummaryResolver for ClassSummaryResolver<'_> {
@@ -138,7 +145,32 @@ impl MethodSummaryResolver for ClassSummaryResolver<'_> {
     ) -> Option<InferredType> {
         self.external
             .and_then(|resolver| resolver.return_type(owner, name, descriptor))
-            .or_else(|| self.local.return_type(owner, name, descriptor))
+    }
+
+    fn return_type_for_invocation(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+    ) -> Option<InferredType> {
+        self.external
+            .and_then(|resolver| {
+                resolver.return_type_for_invocation(owner, name, descriptor, invocation_kind)
+            })
+            .or_else(|| {
+                local_call_is_deterministic(
+                    self.owner,
+                    self.methods,
+                    self.method_indices,
+                    owner,
+                    name,
+                    descriptor,
+                    invocation_kind,
+                )
+                .then(|| self.local.return_type(owner, name, descriptor))
+                .flatten()
+            })
     }
 }
 
@@ -169,27 +201,30 @@ fn update_local_method_summary(
     true
 }
 
-fn local_summary_callers(class: &ClassIr) -> Vec<Vec<usize>> {
-    let method_indices = class
+fn local_method_indices(class: &ClassIr) -> HashMap<MethodKey, usize> {
+    class
         .methods
         .iter()
         .enumerate()
         .map(|(index, method)| (MethodKey::from_method(method), index))
-        .collect::<HashMap<_, _>>();
+        .collect()
+}
+
+fn local_summary_callers(
+    class: &ClassIr,
+    method_indices: &HashMap<MethodKey, usize>,
+) -> Vec<Vec<usize>> {
     let mut callers = vec![Vec::new(); class.methods.len()];
 
     for (caller_index, method) in class.methods.iter().enumerate() {
         for instruction in method
             .instructions
             .iter()
-            .filter(|instruction| matches!(instruction.opcode, 0xb7 | 0xb8))
+            .filter(|instruction| matches!(instruction.opcode, 0xb6..=0xb8))
         {
             let Some((owner, name, descriptor)) = resolved_method_reference(instruction) else {
                 continue;
             };
-            if owner != &class.name {
-                continue;
-            }
             let Ok(descriptor) = MethodDescriptor::parse(descriptor) else {
                 continue;
             };
@@ -200,6 +235,21 @@ fn local_summary_callers(class: &ClassIr) -> Vec<Vec<usize>> {
             let Some(target_index) = method_indices.get(&key) else {
                 continue;
             };
+            let Some(invocation_kind) = MethodInvocationKind::from_opcode(instruction.opcode)
+            else {
+                continue;
+            };
+            if !local_call_is_deterministic(
+                &class.name,
+                &class.methods,
+                method_indices,
+                owner,
+                name,
+                &key.descriptor,
+                invocation_kind,
+            ) {
+                continue;
+            }
             callers[*target_index].push(caller_index);
         }
     }
@@ -209,6 +259,33 @@ fn local_summary_callers(class: &ClassIr) -> Vec<Vec<usize>> {
         callers.dedup();
     }
     callers
+}
+
+fn local_call_is_deterministic(
+    local_owner: &ClassName,
+    methods: &[MethodIr],
+    method_indices: &HashMap<MethodKey, usize>,
+    owner: &ClassName,
+    name: &str,
+    descriptor: &MethodDescriptor,
+    invocation_kind: MethodInvocationKind,
+) -> bool {
+    if owner != local_owner {
+        return false;
+    }
+    match invocation_kind {
+        MethodInvocationKind::Static | MethodInvocationKind::Special => true,
+        MethodInvocationKind::Virtual => {
+            let key = MethodKey {
+                name: name.to_owned(),
+                descriptor: descriptor.clone(),
+            };
+            method_indices
+                .get(&key)
+                .is_some_and(|index| methods[*index].access_flags & 0x0010 != 0)
+        }
+        MethodInvocationKind::Interface => false,
+    }
 }
 
 fn resolved_method_reference(instruction: &InstructionIr) -> Option<(&ClassName, &str, &str)> {

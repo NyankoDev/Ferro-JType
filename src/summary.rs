@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ClassName, InferredType, MethodDescriptor, TypeDescriptor};
+use crate::{ClassName, InferredType, MethodDescriptor, MethodInvocationKind, TypeDescriptor};
 
 /// Resolves a caller-supplied inferred return type for one member invocation.
 ///
@@ -15,6 +15,22 @@ pub trait MethodSummaryResolver: Send + Sync {
         name: &str,
         descriptor: &MethodDescriptor,
     ) -> Option<InferredType>;
+
+    /// Returns the inferred return type for one invocation with its dispatch kind.
+    ///
+    /// The default preserves compatibility with resolvers that only distinguish
+    /// member references. Override this method when the summary depends on
+    /// whether the call is statically or dynamically dispatched.
+    fn return_type_for_invocation(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+    ) -> Option<InferredType> {
+        let _ = invocation_kind;
+        self.return_type(owner, name, descriptor)
+    }
 }
 
 /// Resolves a caller-supplied inferred value type for one static field read.
