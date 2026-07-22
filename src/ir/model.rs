@@ -1,4 +1,6 @@
-use crate::{ClassName, MethodDescriptor};
+use std::collections::BTreeMap;
+
+use crate::{ClassName, InferredType, MethodDescriptor};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
@@ -16,6 +18,13 @@ pub(crate) struct MethodIr {
     pub(crate) max_locals: u16,
     pub(crate) instructions: Vec<InstructionIr>,
     pub(crate) exception_handlers: Vec<ExceptionHandlerIr>,
+    pub(crate) verification_frames: BTreeMap<u16, VerificationFrameIr>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VerificationFrameIr {
+    pub(crate) locals: Vec<InferredType>,
+    pub(crate) stack: Vec<InferredType>,
 }
 
 #[derive(Debug, Clone)]

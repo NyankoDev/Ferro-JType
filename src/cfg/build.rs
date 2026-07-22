@@ -31,6 +31,12 @@ pub(crate) fn build_cfg(method: &MethodIr) -> CfgBuildResult {
     let mut starts = BTreeSet::from([method.instructions[0].offset]);
     let mut diagnostics = Vec::new();
 
+    for offset in method.verification_frames.keys() {
+        if instruction_positions.contains_key(offset) {
+            starts.insert(*offset);
+        }
+    }
+
     for (index, instruction) in method.instructions.iter().enumerate() {
         let has_next = method.instructions.get(index + 1).map(|next| next.offset);
         let control_targets = instruction_targets(instruction);

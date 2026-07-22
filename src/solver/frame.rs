@@ -1,3 +1,4 @@
+use crate::ir::VerificationFrameIr;
 use crate::{ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,16 @@ impl Frame {
                 None => ReferenceType::Unknown,
             })],
         }
+    }
+
+    pub(crate) fn apply_verification_frame(&mut self, verification: &VerificationFrameIr) -> bool {
+        if self.locals == verification.locals && self.stack == verification.stack {
+            return false;
+        }
+
+        self.locals.clone_from(&verification.locals);
+        self.stack.clone_from(&verification.stack);
+        true
     }
 
     pub(crate) fn merge_from(&mut self, incoming: &Self) -> MergeOutcome {

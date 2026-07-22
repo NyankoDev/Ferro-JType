@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::cfg::{EdgeKind, build_cfg};
-use crate::ir::{ClassIr, MethodIr};
+use crate::ir::{ClassIr, MethodIr, VerificationFrameIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::{
@@ -49,7 +49,7 @@ fn analyze_method(
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
     let mut diagnostics = cfg_result.diagnostics;
-    let entry_frame = Frame::entry(
+    let mut entry_frame = Frame::entry(
         owner,
         &method.descriptor,
         method.access_flags,
@@ -75,6 +75,13 @@ fn analyze_method(
             diagnostics,
         );
     };
+
+    if let Some(verification) = method
+        .verification_frames
+        .get(&graph.blocks[entry].start_offset)
+    {
+        entry_frame.apply_verification_frame(verification);
+    }
 
     let mut incoming = HashMap::from([(entry, entry_frame.clone())]);
     let mut worklist = VecDeque::from([entry]);
@@ -134,6 +141,9 @@ fn analyze_method(
                 &mut incoming,
                 edge.target,
                 outgoing,
+                method
+                    .verification_frames
+                    .get(&graph.blocks[edge.target].start_offset),
                 method,
                 block.start_offset,
                 &mut diagnostics,
@@ -144,7 +154,12 @@ fn analyze_method(
         }
     }
 
-    let local_types = collect_local_types(&incoming, &observations, entry_frame.locals);
+    let local_types = collect_local_types(
+        &incoming,
+        &observations,
+        entry_frame.locals,
+        &method.verification_frames,
+    );
     let instructions = observations.into_values().collect();
     (
         MethodInference::new(
@@ -163,16 +178,24 @@ fn merge_frame(
     incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
     target: crate::cfg::BlockId,
     outgoing: Frame,
+    verification: Option<&VerificationFrameIr>,
     method: &MethodIr,
     offset: u16,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
     let Some(existing) = incoming.get_mut(&target) else {
-        incoming.insert(target, outgoing);
+        let mut incoming_frame = outgoing;
+        if let Some(verification) = verification {
+            incoming_frame.apply_verification_frame(verification);
+        }
+        incoming.insert(target, incoming_frame);
         return true;
     };
 
     let outcome = existing.merge_from(&outgoing);
+    let verification_changed = verification
+        .map(|verification| existing.apply_verification_frame(verification))
+        .unwrap_or(false);
     if outcome.stack_height_mismatch {
         diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
@@ -181,13 +204,14 @@ fn merge_frame(
             "control-flow paths reached a block with different operand-stack heights",
         ));
     }
-    outcome.changed
+    outcome.changed || verification_changed
 }
 
 fn collect_local_types(
     incoming: &HashMap<crate::cfg::BlockId, Frame>,
     observations: &BTreeMap<u16, InstructionInference>,
     entry_locals: Vec<InferredType>,
+    verification_frames: &BTreeMap<u16, VerificationFrameIr>,
 ) -> Vec<InferredType> {
     let mut locals = entry_locals;
     for frame in incoming.values() {
@@ -195,6 +219,15 @@ fn collect_local_types(
     }
     for observation in observations.values() {
         merge_locals(&mut locals, observation.local_types());
+    }
+    let mut verification_locals = Vec::new();
+    for frame in verification_frames.values() {
+        merge_locals(&mut verification_locals, &frame.locals);
+    }
+    for (local, verification) in locals.iter_mut().zip(&verification_locals) {
+        if !matches!(verification, InferredType::Bottom) {
+            *local = verification.clone();
+        }
     }
     locals
 }
