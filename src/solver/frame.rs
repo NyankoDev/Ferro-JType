@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 
-use crate::{ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor};
+use crate::{
+    ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor,
+    types::join_local_types,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Frame {
@@ -222,7 +225,7 @@ impl Frame {
         self.local_return_targets.resize(local_count, None);
         for (index, value) in incoming.locals.iter().enumerate() {
             let existing = self.locals[index].clone();
-            let merged = self.locals[index].join(value);
+            let merged = join_local_types(&self.locals[index], value);
             self.local_return_targets[index] = merged_return_targets(
                 &existing,
                 self.local_return_targets[index].as_ref(),

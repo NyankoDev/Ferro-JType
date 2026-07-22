@@ -4,6 +4,7 @@ use crate::cfg::{EdgeKind, build_cfg};
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
+use crate::types::join_local_types;
 use crate::{
     ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
     Error, InferenceConfig, InferredType, InstructionInference, MethodInference, ReferenceType,
@@ -444,7 +445,7 @@ fn local_values_are_catch_types(
 fn merge_locals(destination: &mut Vec<InferredType>, source: &[InferredType]) {
     destination.resize(destination.len().max(source.len()), InferredType::Bottom);
     for (destination, source) in destination.iter_mut().zip(source) {
-        *destination = destination.join(source);
+        *destination = join_local_types(destination, source);
     }
 }
 

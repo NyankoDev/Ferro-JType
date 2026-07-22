@@ -62,8 +62,36 @@ pub enum InferredType {
     },
     /// A return address used by legacy `jsr` and `ret` bytecode.
     ReturnAddress,
+    /// Distinct types observed for one reused local-variable slot.
+    ///
+    /// This is only used for local slots and method summaries. Operand-stack
+    /// conflicts continue to use [`Self::Conflict`].
+    Alternatives(Vec<InferredType>),
     /// Incompatible values reached the same control-flow position.
     Conflict,
+}
+
+/// Joins local-variable types while preserving independent slot lifetimes.
+#[must_use]
+pub(crate) fn join_local_types(left: &InferredType, right: &InferredType) -> InferredType {
+    let joined = left.join(right);
+    if !matches!(joined, InferredType::Conflict) {
+        return joined;
+    }
+
+    let mut alternatives = Vec::new();
+    append_alternatives(&mut alternatives, left);
+    append_alternatives(&mut alternatives, right);
+    alternatives.sort_by_key(|value| format!("{value:?}"));
+    alternatives.dedup();
+    InferredType::Alternatives(alternatives)
+}
+
+fn append_alternatives(destination: &mut Vec<InferredType>, value: &InferredType) {
+    match value {
+        InferredType::Alternatives(values) => destination.extend(values.iter().cloned()),
+        value => destination.push(value.clone()),
+    }
 }
 
 impl InferredType {
