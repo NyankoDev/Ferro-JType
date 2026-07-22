@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::cfg::build_cfg;
+use crate::cfg::{EdgeKind, build_cfg};
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
@@ -97,8 +97,12 @@ fn analyze_method(
 
         let block = &graph.blocks[block_id];
         let mut frame = incoming[&block_id].clone();
+        let mut terminator_instanceof_fact = None;
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
+            if is_instanceof_branch(instruction.opcode) {
+                terminator_instanceof_fact = before.top_instanceof_fact();
+            }
             transfer(method, instruction, &mut frame, &mut diagnostics);
             propagate_exception_edges(
                 &block.exception_successors,
@@ -125,7 +129,15 @@ fn analyze_method(
         }
 
         for edge in &block.successors {
-            let outgoing = frame.clone();
+            let mut outgoing = frame.clone();
+            if let Some(fact) = &terminator_instanceof_fact
+                && instanceof_true_edge(
+                    method.instructions[block.instruction_range.end - 1].opcode,
+                    &edge.kind,
+                )
+            {
+                outgoing.refine_local(fact.local, fact.reference.clone());
+            }
             let changed = merge_frame(
                 &mut incoming,
                 edge.target,
@@ -164,6 +176,17 @@ fn analyze_method(
             instructions,
         ),
         diagnostics,
+    )
+}
+
+const fn is_instanceof_branch(opcode: u8) -> bool {
+    matches!(opcode, 0x99 | 0x9a)
+}
+
+const fn instanceof_true_edge(opcode: u8, edge_kind: &EdgeKind) -> bool {
+    matches!(
+        (opcode, edge_kind),
+        (0x99, EdgeKind::FallThrough) | (0x9a, EdgeKind::Branch)
     )
 }
 

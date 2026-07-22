@@ -8,12 +8,22 @@ pub(crate) struct Frame {
     pub(crate) stack: Vec<InferredType>,
     local_return_targets: Vec<Option<BTreeSet<u16>>>,
     stack_return_targets: Vec<Option<BTreeSet<u16>>>,
+    stack_local_origins: Vec<Option<u16>>,
+    stack_instanceof_facts: Vec<Option<InstanceOfFact>>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct FrameValue {
     pub(crate) value: InferredType,
     return_targets: Option<BTreeSet<u16>>,
+    pub(crate) local_origin: Option<u16>,
+    instanceof_fact: Option<InstanceOfFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InstanceOfFact {
+    pub(crate) local: u16,
+    pub(crate) reference: ReferenceType,
 }
 
 impl FrameValue {
@@ -21,6 +31,8 @@ impl FrameValue {
         Self {
             value,
             return_targets: None,
+            local_origin: None,
+            instanceof_fact: None,
         }
     }
 }
@@ -60,6 +72,8 @@ impl Frame {
             locals,
             stack: Vec::new(),
             stack_return_targets: Vec::new(),
+            stack_local_origins: Vec::new(),
+            stack_instanceof_facts: Vec::new(),
         }
     }
 
@@ -80,6 +94,8 @@ impl Frame {
                 .get(local)
                 .cloned()
                 .unwrap_or(None),
+            local_origin: None,
+            instanceof_fact: None,
         }
     }
 
@@ -107,30 +123,66 @@ impl Frame {
     pub(crate) fn pop_value(&mut self) -> Option<FrameValue> {
         let value = self.stack.pop()?;
         let return_targets = self.stack_return_targets.pop().unwrap_or(None);
+        let local_origin = self.stack_local_origins.pop().unwrap_or(None);
+        let instanceof_fact = self.stack_instanceof_facts.pop().unwrap_or(None);
         Some(FrameValue {
             value,
             return_targets,
+            local_origin,
+            instanceof_fact,
         })
     }
 
     pub(crate) fn push_value(&mut self, value: FrameValue) {
         self.stack.push(value.value);
         self.stack_return_targets.push(value.return_targets);
+        self.stack_local_origins.push(value.local_origin);
+        self.stack_instanceof_facts.push(value.instanceof_fact);
     }
 
     pub(crate) fn push_return_address(&mut self, target: u16) {
         self.stack.push(InferredType::ReturnAddress);
         self.stack_return_targets
             .push(Some(BTreeSet::from([target])));
+        self.stack_local_origins.push(None);
+        self.stack_instanceof_facts.push(None);
     }
 
     pub(crate) fn clear_stack(&mut self) {
         self.stack.clear();
         self.stack_return_targets.clear();
+        self.stack_local_origins.clear();
+        self.stack_instanceof_facts.clear();
     }
 
     pub(crate) fn local_return_targets(&self, local: u16) -> Option<&BTreeSet<u16>> {
         self.local_return_targets.get(usize::from(local))?.as_ref()
+    }
+
+    pub(crate) fn push_local(&mut self, local: u16) {
+        let mut value = self.get_local_value(local);
+        value.local_origin = Some(local);
+        self.push_value(value);
+    }
+
+    pub(crate) fn push_instanceof_result(&mut self, fact: Option<InstanceOfFact>) {
+        let mut value = FrameValue::plain(InferredType::Int);
+        value.instanceof_fact = fact;
+        self.push_value(value);
+    }
+
+    pub(crate) fn top_instanceof_fact(&self) -> Option<InstanceOfFact> {
+        self.stack_instanceof_facts.last().cloned().flatten()
+    }
+
+    pub(crate) fn refine_local(&mut self, local: u16, reference: ReferenceType) {
+        let local = usize::from(local);
+        if let Some(value) = self.locals.get_mut(local)
+            && matches!(value, InferredType::Reference(_))
+        {
+            *value = InferredType::Reference(reference);
+            self.local_return_targets[local] = None;
+        }
     }
 
     pub(crate) fn replace_uninitialized(&mut self, allocation_offset: u16, class_name: ClassName) {
@@ -157,6 +209,8 @@ impl Frame {
             })],
             local_return_targets: self.local_return_targets.clone(),
             stack_return_targets: vec![None],
+            stack_local_origins: vec![None],
+            stack_instanceof_facts: vec![None],
         }
     }
 
@@ -190,6 +244,8 @@ impl Frame {
             if self.stack != merged {
                 self.stack = merged;
                 self.stack_return_targets = vec![None; stack_len];
+                self.stack_local_origins = vec![None; stack_len];
+                self.stack_instanceof_facts = vec![None; stack_len];
             }
             stack_height_mismatch = true;
         } else {
@@ -209,6 +265,12 @@ impl Frame {
                 );
                 if merged != self.stack[index] {
                     self.stack[index] = merged;
+                }
+                if self.stack_local_origins[index] != incoming.stack_local_origins[index] {
+                    self.stack_local_origins[index] = None;
+                }
+                if self.stack_instanceof_facts[index] != incoming.stack_instanceof_facts[index] {
+                    self.stack_instanceof_facts[index] = None;
                 }
             }
         }

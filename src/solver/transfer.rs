@@ -1,5 +1,5 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
-use crate::solver::frame::{Frame, FrameValue, inferred_from_descriptor};
+use crate::solver::frame::{Frame, FrameValue, InstanceOfFact, inferred_from_descriptor};
 use crate::{
     ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, InferredType,
     MethodDescriptor, ReferenceType, ReturnType, TypeDescriptor,
@@ -110,10 +110,7 @@ pub(crate) fn transfer(
         }
         0xbf => discard(frame, method, instruction, diagnostics),
         0xc0 => cast_reference(instruction, frame, method, diagnostics),
-        0xc1 => {
-            discard(frame, method, instruction, diagnostics);
-            frame.push(InferredType::Int);
-        }
+        0xc1 => instance_of(instruction, frame, method, diagnostics),
         0xc2 | 0xc3 => discard(frame, method, instruction, diagnostics),
         0xc5 => allocate_multi_array(instruction, frame, method, diagnostics),
         0xca | 0xfe | 0xff => unsupported(method, instruction, diagnostics),
@@ -123,7 +120,7 @@ pub(crate) fn transfer(
 
 fn load_local(instruction: &InstructionIr, frame: &mut Frame, wide_opcode: u8, short_base: u8) {
     let local = local_index(instruction, wide_opcode, short_base).unwrap_or_default();
-    frame.push_value(frame.get_local_value(local));
+    frame.push_local(local);
 }
 
 fn store_local(
@@ -450,6 +447,27 @@ fn cast_reference(
         })
         .unwrap_or(ReferenceType::Unknown);
     frame.push(InferredType::Reference(reference));
+}
+
+fn instance_of(
+    instruction: &InstructionIr,
+    frame: &mut Frame,
+    method: &MethodIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let value = pop_value(frame, method, instruction, diagnostics);
+    let reference = type_name(instruction)
+        .and_then(reference_descriptor)
+        .and_then(|descriptor| match descriptor {
+            TypeDescriptor::Reference(class_name) => Some(ReferenceType::Exact(class_name)),
+            descriptor @ TypeDescriptor::Array { .. } => Some(ReferenceType::Array(descriptor)),
+            TypeDescriptor::Primitive(_) => None,
+        });
+    let fact = value
+        .local_origin
+        .zip(reference)
+        .map(|(local, reference)| InstanceOfFact { local, reference });
+    frame.push_instanceof_result(fact);
 }
 
 fn allocate_multi_array(
