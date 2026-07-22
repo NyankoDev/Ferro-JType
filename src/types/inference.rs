@@ -1,3 +1,4 @@
+use crate::hierarchy::{TypeHierarchy, common_supertype};
 use crate::{ClassName, TypeDescriptor};
 
 /// Inferred state for a JVM reference value.
@@ -7,7 +8,11 @@ use crate::{ClassName, TypeDescriptor};
 /// bytes do not supply enough information to establish a reference type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReferenceType {
-    /// A reference known to have exactly this runtime class.
+    /// A reference whose bytecode supplies this static class type.
+    ///
+    /// This is not a claim about the object's exact runtime subclass. For
+    /// example, an `Object`-returning method still has this static type when
+    /// its implementation happens to return a `String`.
     Exact(ClassName),
     /// A reference known to be an array of the described type.
     Array(TypeDescriptor),
@@ -24,12 +29,15 @@ impl ReferenceType {
         Self::Exact(class_name)
     }
 
-    fn join(&self, other: &Self) -> Self {
+    fn join(&self, other: &Self, hierarchy: Option<&dyn TypeHierarchy>) -> Self {
         match (self, other) {
             (Self::Null, reference) | (reference, Self::Null) => reference.clone(),
             (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
             (Self::Exact(left), Self::Exact(right)) if left == right => Self::Exact(left.clone()),
             (Self::Array(left), Self::Array(right)) if left == right => Self::Array(left.clone()),
+            (Self::Exact(left), Self::Exact(right)) => {
+                Self::Exact(common_supertype(hierarchy, left, right))
+            }
             _ => Self::Exact(ClassName::java_lang_object()),
         }
     }
@@ -73,8 +81,12 @@ pub enum InferredType {
 
 /// Joins local-variable types while preserving independent slot lifetimes.
 #[must_use]
-pub(crate) fn join_local_types(left: &InferredType, right: &InferredType) -> InferredType {
-    let joined = left.join(right);
+pub(crate) fn join_local_types(
+    left: &InferredType,
+    right: &InferredType,
+    hierarchy: Option<&dyn TypeHierarchy>,
+) -> InferredType {
+    let joined = left.join_with_hierarchy(right, hierarchy);
     if !matches!(joined, InferredType::Conflict) {
         return joined;
     }
@@ -102,6 +114,14 @@ impl InferredType {
     /// references become [`ReferenceType::Unknown`].
     #[must_use]
     pub fn join(&self, other: &Self) -> Self {
+        self.join_with_hierarchy(other, None)
+    }
+
+    pub(crate) fn join_with_hierarchy(
+        &self,
+        other: &Self,
+        hierarchy: Option<&dyn TypeHierarchy>,
+    ) -> Self {
         match (self, other) {
             (Self::Bottom, value) | (value, Self::Bottom) => value.clone(),
             (Self::Int, Self::Int)
@@ -110,7 +130,9 @@ impl InferredType {
             | (Self::Double, Self::Double)
             | (Self::ReturnAddress, Self::ReturnAddress)
             | (Self::Conflict, Self::Conflict) => self.clone(),
-            (Self::Reference(left), Self::Reference(right)) => Self::Reference(left.join(right)),
+            (Self::Reference(left), Self::Reference(right)) => {
+                Self::Reference(left.join(right, hierarchy))
+            }
             (
                 Self::Uninitialized {
                     class_name: left_name,

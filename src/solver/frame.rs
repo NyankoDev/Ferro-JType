@@ -217,7 +217,11 @@ impl Frame {
         }
     }
 
-    pub(crate) fn merge_from(&mut self, incoming: &Self) -> MergeOutcome {
+    pub(crate) fn merge_from(
+        &mut self,
+        incoming: &Self,
+        hierarchy: Option<&dyn crate::TypeHierarchy>,
+    ) -> MergeOutcome {
         let mut stack_height_mismatch = false;
 
         let local_count = self.locals.len().max(incoming.locals.len());
@@ -225,7 +229,7 @@ impl Frame {
         self.local_return_targets.resize(local_count, None);
         for (index, value) in incoming.locals.iter().enumerate() {
             let existing = self.locals[index].clone();
-            let merged = join_local_types(&self.locals[index], value);
+            let merged = join_local_types(&self.locals[index], value, hierarchy);
             self.local_return_targets[index] = merged_return_targets(
                 &existing,
                 self.local_return_targets[index].as_ref(),
@@ -255,7 +259,7 @@ impl Frame {
             for index in 0..self.stack.len() {
                 let existing = self.stack[index].clone();
                 let value = &incoming.stack[index];
-                let merged = existing.join(value);
+                let merged = existing.join_with_hierarchy(value, hierarchy);
                 self.stack_return_targets[index] = merged_return_targets(
                     &existing,
                     self.stack_return_targets[index].as_ref(),

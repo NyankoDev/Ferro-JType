@@ -1,18 +1,48 @@
+use std::sync::Arc;
+
 use crate::ir::parse_and_lower;
 use crate::solver::analyze_class;
-use crate::{ClassInference, Error};
+use crate::{ClassInference, Error, TypeHierarchy};
 
 /// Configuration for a bounded class-file type-inference run.
 ///
 /// The default permits diagnostics and bounds the work performed for every
 /// analyzed method. Use the builder-style methods to tighten or relax these
 /// limits for a particular input corpus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct InferenceConfig {
     strict: bool,
     max_block_iterations: usize,
     max_work_items: usize,
+    hierarchy: Option<Arc<dyn TypeHierarchy>>,
 }
+
+impl std::fmt::Debug for InferenceConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InferenceConfig")
+            .field("strict", &self.strict)
+            .field("max_block_iterations", &self.max_block_iterations)
+            .field("max_work_items", &self.max_work_items)
+            .field("has_type_hierarchy", &self.hierarchy.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for InferenceConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.strict == other.strict
+            && self.max_block_iterations == other.max_block_iterations
+            && self.max_work_items == other.max_work_items
+            && match (&self.hierarchy, &other.hierarchy) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for InferenceConfig {}
 
 impl Default for InferenceConfig {
     fn default() -> Self {
@@ -20,6 +50,7 @@ impl Default for InferenceConfig {
             strict: false,
             max_block_iterations: 128,
             max_work_items: 50_000,
+            hierarchy: None,
         }
     }
 }
@@ -41,6 +72,12 @@ impl InferenceConfig {
     #[must_use]
     pub const fn max_work_items(&self) -> usize {
         self.max_work_items
+    }
+
+    /// Returns whether optional class-hierarchy refinement is enabled.
+    #[must_use]
+    pub const fn has_type_hierarchy(&self) -> bool {
+        self.hierarchy.is_some()
     }
 
     /// Makes diagnostics other than notes fail with [`Error::StrictAnalysis`].
@@ -66,6 +103,20 @@ impl InferenceConfig {
     pub const fn with_max_work_items(mut self, max_work_items: usize) -> Self {
         self.max_work_items = max_work_items;
         self
+    }
+
+    /// Enables hierarchy-aware reference merges with a caller-provided source.
+    ///
+    /// The supplied hierarchy is consulted only during type merges. It never
+    /// causes the inferer to load classes or execute Java code.
+    #[must_use]
+    pub fn with_shared_type_hierarchy(mut self, hierarchy: Arc<dyn TypeHierarchy>) -> Self {
+        self.hierarchy = Some(hierarchy);
+        self
+    }
+
+    pub(crate) fn type_hierarchy(&self) -> Option<&dyn TypeHierarchy> {
+        self.hierarchy.as_deref()
     }
 
     pub(crate) fn validate(&self) -> Result<(), Error> {

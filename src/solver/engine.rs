@@ -49,6 +49,7 @@ fn analyze_method(
 ) -> (MethodInference, Vec<Diagnostic>) {
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
+    let hierarchy = config.type_hierarchy();
     let mut diagnostics = cfg_result.diagnostics;
     let entry_frame = Frame::entry(
         owner,
@@ -105,14 +106,18 @@ fn analyze_method(
                 terminator_instanceof_fact = before.top_instanceof_fact();
             }
             transfer(method, instruction, &mut frame, &mut diagnostics);
+            let mut propagation = Propagation {
+                method,
+                diagnostics: &mut diagnostics,
+                worklist: &mut worklist,
+                hierarchy,
+            };
             propagate_exception_edges(
                 &block.exception_successors,
                 instruction.offset,
                 before,
                 &mut incoming,
-                method,
-                &mut diagnostics,
-                &mut worklist,
+                &mut propagation,
             );
             if frame.stack.len() > usize::from(method.max_stack) {
                 diagnostics.push(Diagnostic::new(
@@ -139,33 +144,47 @@ fn analyze_method(
             {
                 outgoing.refine_local(fact.local, fact.reference.clone());
             }
-            let changed = merge_frame(
+            let mut propagation = Propagation {
+                method,
+                diagnostics: &mut diagnostics,
+                worklist: &mut worklist,
+                hierarchy,
+            };
+            if merge_frame(
                 &mut incoming,
                 edge.target,
                 outgoing,
-                method,
                 block.start_offset,
-                &mut diagnostics,
-            );
-            if changed {
-                worklist.push_back(edge.target);
+                &mut propagation,
+            ) {
+                propagation.worklist.push_back(edge.target);
             }
         }
 
         let last_instruction = &method.instructions[block.instruction_range.end - 1];
+        let mut propagation = Propagation {
+            method,
+            diagnostics: &mut diagnostics,
+            worklist: &mut worklist,
+            hierarchy,
+        };
         propagate_subroutine_return(
             &graph,
             last_instruction,
             &frame,
             &mut incoming,
-            method,
-            &mut diagnostics,
-            &mut worklist,
+            &mut propagation,
         );
     }
 
     let observations = observe_final_frames(method, &graph, &incoming);
-    let local_types = collect_local_types(&incoming, &observations, entry_frame.locals, method);
+    let local_types = collect_local_types(
+        &incoming,
+        &observations,
+        entry_frame.locals,
+        method,
+        hierarchy,
+    );
     let instructions = observations.into_values().collect();
     (
         MethodInference::new(
@@ -191,14 +210,19 @@ const fn instanceof_true_edge(opcode: u8, edge_kind: &EdgeKind) -> bool {
     )
 }
 
+struct Propagation<'a> {
+    method: &'a MethodIr,
+    diagnostics: &'a mut Vec<Diagnostic>,
+    worklist: &'a mut VecDeque<crate::cfg::BlockId>,
+    hierarchy: Option<&'a dyn crate::TypeHierarchy>,
+}
+
 fn propagate_exception_edges(
     edges: &[crate::cfg::ExceptionEdge],
     instruction_offset: u16,
     before: Frame,
     incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    worklist: &mut VecDeque<crate::cfg::BlockId>,
+    propagation: &mut Propagation<'_>,
 ) {
     for edge in edges
         .iter()
@@ -209,11 +233,10 @@ fn propagate_exception_edges(
             incoming,
             edge.target,
             outgoing,
-            method,
             instruction_offset,
-            diagnostics,
+            propagation,
         ) {
-            worklist.push_back(edge.target);
+            propagation.worklist.push_back(edge.target);
         }
     }
 }
@@ -223,28 +246,26 @@ fn propagate_subroutine_return(
     instruction: &InstructionIr,
     frame: &Frame,
     incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    worklist: &mut VecDeque<crate::cfg::BlockId>,
+    propagation: &mut Propagation<'_>,
 ) {
     if instruction.opcode != 0xa9 {
         return;
     }
 
     let InstructionOperandIr::Local(local) = instruction.operand else {
-        diagnostics.push(Diagnostic::new(
+        propagation.diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
             DiagnosticKind::InvalidControlFlow,
-            location(method, instruction.offset),
+            location(propagation.method, instruction.offset),
             "ret instruction does not identify a local-variable slot",
         ));
         return;
     };
     let Some(targets) = frame.local_return_targets(local) else {
-        diagnostics.push(Diagnostic::new(
+        propagation.diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
             DiagnosticKind::InvalidControlFlow,
-            location(method, instruction.offset),
+            location(propagation.method, instruction.offset),
             format!("ret local slot {local} has no known return address"),
         ));
         return;
@@ -252,10 +273,10 @@ fn propagate_subroutine_return(
 
     for target_offset in targets {
         let Some(target) = graph.block_at_offset(*target_offset) else {
-            diagnostics.push(Diagnostic::new(
+            propagation.diagnostics.push(Diagnostic::new(
                 DiagnosticSeverity::Warning,
                 DiagnosticKind::InvalidControlFlow,
-                location(method, instruction.offset),
+                location(propagation.method, instruction.offset),
                 format!("ret target {target_offset} does not identify an instruction"),
             ));
             continue;
@@ -264,11 +285,10 @@ fn propagate_subroutine_return(
             incoming,
             target,
             frame.clone(),
-            method,
             instruction.offset,
-            diagnostics,
+            propagation,
         ) {
-            worklist.push_back(target);
+            propagation.worklist.push_back(target);
         }
     }
 }
@@ -309,9 +329,8 @@ fn merge_frame(
     incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
     target: crate::cfg::BlockId,
     outgoing: Frame,
-    method: &MethodIr,
     offset: u16,
-    diagnostics: &mut Vec<Diagnostic>,
+    propagation: &mut Propagation<'_>,
 ) -> bool {
     let Some(existing) = incoming.get_mut(&target) else {
         incoming.insert(target, outgoing);
@@ -319,12 +338,16 @@ fn merge_frame(
     };
 
     let previous = existing.clone();
-    let outcome = existing.merge_from(&outgoing);
+    let outcome = existing.merge_from(&outgoing, propagation.hierarchy);
     if outcome.stack_height_mismatch {
-        diagnostics.push(Diagnostic::new(
+        propagation.diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
             DiagnosticKind::StackHeightMismatch,
-            DiagnosticLocation::method(&method.name, &method.descriptor_text).at_offset(offset),
+            DiagnosticLocation::method(
+                &propagation.method.name,
+                &propagation.method.descriptor_text,
+            )
+            .at_offset(offset),
             "control-flow paths reached a block with different operand-stack heights",
         ));
     }
@@ -336,13 +359,14 @@ fn collect_local_types(
     observations: &BTreeMap<u16, InstructionInference>,
     entry_locals: Vec<InferredType>,
     method: &MethodIr,
+    hierarchy: Option<&dyn crate::TypeHierarchy>,
 ) -> Vec<InferredType> {
     let mut locals = entry_locals;
     for frame in incoming.values() {
-        merge_locals(&mut locals, &frame.locals);
+        merge_locals(&mut locals, &frame.locals, hierarchy);
     }
     for observation in observations.values() {
-        merge_locals(&mut locals, observation.local_types());
+        merge_locals(&mut locals, observation.local_types(), hierarchy);
     }
     refine_catch_local_types(&mut locals, incoming, observations, method);
     locals
@@ -442,10 +466,14 @@ fn local_values_are_catch_types(
     saw_catch_value
 }
 
-fn merge_locals(destination: &mut Vec<InferredType>, source: &[InferredType]) {
+fn merge_locals(
+    destination: &mut Vec<InferredType>,
+    source: &[InferredType],
+    hierarchy: Option<&dyn crate::TypeHierarchy>,
+) {
     destination.resize(destination.len().max(source.len()), InferredType::Bottom);
     for (destination, source) in destination.iter_mut().zip(source) {
-        *destination = join_local_types(destination, source);
+        *destination = join_local_types(destination, source, hierarchy);
     }
 }
 
