@@ -1,6 +1,6 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
-use crate::summary::MethodSummaryResolver;
+use crate::summary::{FieldSummaryResolver, MethodSummaryResolver};
 use crate::{
     ClassName, Diagnostic, InferredType, MethodDescriptor, ReferenceType, ReturnType,
     TypeDescriptor,
@@ -12,6 +12,7 @@ pub(crate) fn transfer(
     frame: &mut Frame,
     diagnostics: &mut Vec<Diagnostic>,
     method_summaries: Option<&dyn MethodSummaryResolver>,
+    field_summaries: Option<&dyn FieldSummaryResolver>,
 ) {
     match instruction.opcode {
         0x00 => {}
@@ -97,9 +98,23 @@ pub(crate) fn transfer(
         0xaa | 0xab => discard(frame, method, instruction, diagnostics),
         0xac..=0xb0 => discard(frame, method, instruction, diagnostics),
         0xb1 | 0xa7 | 0xa9 | 0xc8 => {}
-        0xb2 => field_get(instruction, frame, method, diagnostics, false),
+        0xb2 => field_get(
+            instruction,
+            frame,
+            method,
+            diagnostics,
+            false,
+            field_summaries,
+        ),
         0xb3 => field_put(instruction, frame, method, diagnostics, false),
-        0xb4 => field_get(instruction, frame, method, diagnostics, true),
+        0xb4 => field_get(
+            instruction,
+            frame,
+            method,
+            diagnostics,
+            true,
+            field_summaries,
+        ),
         0xb5 => field_put(instruction, frame, method, diagnostics, true),
         0xb6..=0xb9 => invoke_member(instruction, frame, method, diagnostics, method_summaries),
         0xba => invoke_dynamic(instruction, frame, method, diagnostics),
@@ -252,11 +267,18 @@ fn field_get(
     method: &MethodIr,
     diagnostics: &mut Vec<Diagnostic>,
     has_receiver: bool,
+    field_summaries: Option<&dyn FieldSummaryResolver>,
 ) {
     if has_receiver {
         discard(frame, method, instruction, diagnostics);
     }
-    frame.push(field_type(instruction, method, diagnostics));
+    let field_summaries = (!has_receiver).then_some(field_summaries).flatten();
+    frame.push(field_type(
+        instruction,
+        method,
+        diagnostics,
+        field_summaries,
+    ));
 }
 
 fn field_put(
@@ -373,8 +395,19 @@ fn resolve_method_summary(
 fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &InferredType) -> bool {
     match descriptor.return_type() {
         ReturnType::Void => false,
-        ReturnType::Type(TypeDescriptor::Primitive(primitive)) => matches!(
-            (primitive, return_type),
+        ReturnType::Type(descriptor) => {
+            summary_is_compatible_with_descriptor(descriptor, return_type)
+        }
+    }
+}
+
+fn summary_is_compatible_with_descriptor(
+    descriptor: &TypeDescriptor,
+    value_type: &InferredType,
+) -> bool {
+    match descriptor {
+        TypeDescriptor::Primitive(primitive) => matches!(
+            (primitive, value_type),
             (
                 crate::PrimitiveType::Boolean
                     | crate::PrimitiveType::Byte
@@ -386,14 +419,14 @@ fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &Inf
                 | (crate::PrimitiveType::Long, InferredType::Long)
                 | (crate::PrimitiveType::Double, InferredType::Double)
         ),
-        ReturnType::Type(TypeDescriptor::Reference(_)) => matches!(
-            return_type,
+        TypeDescriptor::Reference(_) => matches!(
+            value_type,
             InferredType::Reference(
                 ReferenceType::Exact(_) | ReferenceType::Array(_) | ReferenceType::Null
             )
         ),
-        ReturnType::Type(TypeDescriptor::Array { .. }) => matches!(
-            return_type,
+        TypeDescriptor::Array { .. } => matches!(
+            value_type,
             InferredType::Reference(ReferenceType::Array(_) | ReferenceType::Null)
         ),
     }
@@ -413,16 +446,25 @@ fn field_type(
     instruction: &InstructionIr,
     method: &MethodIr,
     diagnostics: &mut Vec<Diagnostic>,
+    field_summaries: Option<&dyn FieldSummaryResolver>,
 ) -> InferredType {
-    let InstructionOperandIr::Member(MemberRefIr::Resolved { descriptor, .. }) =
-        &instruction.operand
+    let InstructionOperandIr::Member(MemberRefIr::Resolved {
+        owner,
+        name,
+        descriptor,
+    }) = &instruction.operand
     else {
         unsupported(method, instruction, diagnostics);
         return InferredType::Reference(ReferenceType::Unknown);
     };
 
     TypeDescriptor::parse(descriptor)
-        .map(|descriptor| inferred_from_descriptor(&descriptor))
+        .map(|descriptor| {
+            field_summaries
+                .and_then(|resolver| resolver.value_type(owner, name, &descriptor))
+                .filter(|value_type| summary_is_compatible_with_descriptor(&descriptor, value_type))
+                .unwrap_or_else(|| inferred_from_descriptor(&descriptor))
+        })
         .unwrap_or_else(|_| {
             unsupported(method, instruction, diagnostics);
             InferredType::Reference(ReferenceType::Unknown)

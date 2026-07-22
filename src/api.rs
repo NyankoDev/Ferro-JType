@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::ir::parse_and_lower;
 use crate::solver::analyze_class;
-use crate::{ClassInference, Error, MethodSummaryResolver, TypeHierarchy};
+use crate::{ClassInference, Error, FieldSummaryResolver, MethodSummaryResolver, TypeHierarchy};
 
 /// Configuration for a bounded class-file type-inference run.
 ///
@@ -17,6 +17,7 @@ pub struct InferenceConfig {
     unbounded_analysis: bool,
     hierarchy: Option<Arc<dyn TypeHierarchy>>,
     method_summaries: Option<Arc<dyn MethodSummaryResolver>>,
+    field_summaries: Option<Arc<dyn FieldSummaryResolver>>,
 }
 
 impl std::fmt::Debug for InferenceConfig {
@@ -29,6 +30,7 @@ impl std::fmt::Debug for InferenceConfig {
             .field("unbounded_analysis", &self.unbounded_analysis)
             .field("has_type_hierarchy", &self.hierarchy.is_some())
             .field("has_method_summaries", &self.method_summaries.is_some())
+            .field("has_field_summaries", &self.field_summaries.is_some())
             .finish()
     }
 }
@@ -49,6 +51,11 @@ impl PartialEq for InferenceConfig {
                 (None, None) => true,
                 _ => false,
             }
+            && match (&self.field_summaries, &other.field_summaries) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
     }
 }
 
@@ -63,6 +70,7 @@ impl Default for InferenceConfig {
             unbounded_analysis: false,
             hierarchy: None,
             method_summaries: None,
+            field_summaries: None,
         }
     }
 }
@@ -105,6 +113,12 @@ impl InferenceConfig {
     #[must_use]
     pub const fn has_method_summaries(&self) -> bool {
         self.method_summaries.is_some()
+    }
+
+    /// Returns whether caller-provided static-field summaries are enabled.
+    #[must_use]
+    pub const fn has_field_summaries(&self) -> bool {
+        self.field_summaries.is_some()
     }
 
     /// Makes diagnostics other than notes fail with [`Error::StrictAnalysis`].
@@ -168,12 +182,30 @@ impl InferenceConfig {
         self
     }
 
+    /// Enables caller-provided value summaries for resolved `getstatic` calls.
+    ///
+    /// The resolver is queried using only information already present in the
+    /// class file. It never causes the inferer to load classes or execute Java
+    /// code. Instance-field reads continue to use their descriptor type.
+    #[must_use]
+    pub fn with_shared_field_summaries(
+        mut self,
+        field_summaries: Arc<dyn FieldSummaryResolver>,
+    ) -> Self {
+        self.field_summaries = Some(field_summaries);
+        self
+    }
+
     pub(crate) fn type_hierarchy(&self) -> Option<&dyn TypeHierarchy> {
         self.hierarchy.as_deref()
     }
 
     pub(crate) fn method_summaries(&self) -> Option<&dyn MethodSummaryResolver> {
         self.method_summaries.as_deref()
+    }
+
+    pub(crate) fn field_summaries(&self) -> Option<&dyn FieldSummaryResolver> {
+        self.field_summaries.as_deref()
     }
 
     pub(crate) fn validate(&self) -> Result<(), Error> {

@@ -43,6 +43,7 @@ pub(crate) fn analyze_class(
                 &class.methods[method_index],
                 config,
                 Some(&resolver),
+                config.field_summaries(),
             )
         };
         let summary_changed = update_local_method_summary(&mut summaries, &class.name, &inference);

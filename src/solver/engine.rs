@@ -17,6 +17,7 @@ pub(super) fn analyze_method(
     method: &MethodIr,
     config: &InferenceConfig,
     method_summaries: Option<&dyn MethodSummaryResolver>,
+    field_summaries: Option<&dyn crate::FieldSummaryResolver>,
 ) -> (MethodInference, Vec<Diagnostic>) {
     let cfg_result = build_cfg(method);
     let graph = cfg_result.graph;
@@ -89,6 +90,7 @@ pub(super) fn analyze_method(
                 &mut frame,
                 &mut diagnostics,
                 method_summaries,
+                field_summaries,
             );
             let mut propagation = Propagation {
                 method,
@@ -162,7 +164,8 @@ pub(super) fn analyze_method(
         );
     }
 
-    let observations = observe_final_frames(method, &graph, &incoming, method_summaries);
+    let observations =
+        observe_final_frames(method, &graph, &incoming, method_summaries, field_summaries);
     let local_types = collect_local_types(
         &incoming,
         &observations,
@@ -331,6 +334,7 @@ fn observe_final_frames(
     graph: &crate::cfg::ControlFlowGraph,
     incoming: &HashMap<crate::cfg::BlockId, Frame>,
     method_summaries: Option<&dyn crate::MethodSummaryResolver>,
+    field_summaries: Option<&dyn crate::FieldSummaryResolver>,
 ) -> BTreeMap<u16, InstructionInference> {
     let mut observations = BTreeMap::new();
     let mut ignored_diagnostics = Vec::new();
@@ -349,6 +353,7 @@ fn observe_final_frames(
                 &mut frame,
                 &mut ignored_diagnostics,
                 method_summaries,
+                field_summaries,
             );
             observations.insert(
                 instruction.offset,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ClassName, InferredType, MethodDescriptor};
+use crate::{ClassName, InferredType, MethodDescriptor, TypeDescriptor};
 
 /// Resolves a caller-supplied inferred return type for one member invocation.
 ///
@@ -17,6 +17,22 @@ pub trait MethodSummaryResolver: Send + Sync {
     ) -> Option<InferredType>;
 }
 
+/// Resolves a caller-supplied inferred value type for one static field read.
+///
+/// Return `None` when no trustworthy summary is available. The inferer then
+/// uses the field descriptor's declared type. Resolvers are consulted only for
+/// `getstatic`; instance-field values can vary by receiver and are not global
+/// summaries.
+pub trait FieldSummaryResolver: Send + Sync {
+    /// Returns the inferred value type for one exact static field reference.
+    fn value_type(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &TypeDescriptor,
+    ) -> Option<InferredType>;
+}
+
 /// In-memory method-return summaries supplied by the caller.
 ///
 /// Entries are keyed by the owner, method name, and complete JVM descriptor
@@ -26,6 +42,60 @@ pub trait MethodSummaryResolver: Send + Sync {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MethodSummaries {
     returns: HashMap<ClassName, HashMap<String, HashMap<MethodDescriptor, InferredType>>>,
+}
+
+/// In-memory static-field value summaries supplied by the caller.
+///
+/// Entries are keyed by the owner, field name, and complete JVM descriptor
+/// from a `getstatic` member reference. This type stores no class loader or
+/// Java runtime state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldSummaries {
+    values: HashMap<ClassName, HashMap<String, HashMap<TypeDescriptor, InferredType>>>,
+}
+
+impl FieldSummaries {
+    /// Creates an empty collection of static-field value summaries.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Associates an inferred value type with one exact static field reference.
+    ///
+    /// Returns the previous summary, if the same field reference was already
+    /// present. The inferer ignores a supplied value whose JVM category is
+    /// incompatible with the referenced field descriptor.
+    pub fn insert_value_type(
+        &mut self,
+        owner: ClassName,
+        name: impl Into<String>,
+        descriptor: TypeDescriptor,
+        value_type: InferredType,
+    ) -> Option<InferredType> {
+        self.values
+            .entry(owner)
+            .or_default()
+            .entry(name.into())
+            .or_default()
+            .insert(descriptor, value_type)
+    }
+
+    /// Returns the number of exact static-field summaries held by this map.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values
+            .values()
+            .flat_map(|fields| fields.values())
+            .map(HashMap::len)
+            .sum()
+    }
+
+    /// Returns whether this map has no static-field value summaries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
 }
 
 impl MethodSummaries {
@@ -107,5 +177,16 @@ impl MethodSummaryResolver for MethodSummaries {
         descriptor: &MethodDescriptor,
     ) -> Option<InferredType> {
         self.returns.get(owner)?.get(name)?.get(descriptor).cloned()
+    }
+}
+
+impl FieldSummaryResolver for FieldSummaries {
+    fn value_type(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &TypeDescriptor,
+    ) -> Option<InferredType> {
+        self.values.get(owner)?.get(name)?.get(descriptor).cloned()
     }
 }
