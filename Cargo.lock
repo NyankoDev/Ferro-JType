@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "ferro-jtype"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "FerroBabe",
  "la-arena",
