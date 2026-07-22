@@ -1,6 +1,14 @@
 [package]
 name = "ferro-jtype"
 version = "0.1.0"
+authors = ["Eatgrapes"]
+description = "Type inference for Java class bytecode without JDK symbols"
+license = "MIT"
+repository = "https://github.com/NyankoDev/Ferro-JType"
+documentation = "https://docs.rs/ferro-jtype"
+readme = "README.md"
+keywords = ["java", "jvm", "bytecode", "decompiler", "type-inference"]
+categories = ["compilers", "development-tools", "parser-implementations"]
 edition = "2024"
 
 [dependencies]

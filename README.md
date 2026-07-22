@@ -4,7 +4,13 @@ Ferro-JType is a Lightweight Rust library for inferring types from Java class by
 
 ## Install
 
-Ferro-JType is not published on [crates.io](https://crates.io) yet.
+Ferro-JType is published on [crates.io](https://crates.io/crates/ferro-jtype):
+
+```bash
+cargo add ferro-jtype
+```
+
+API documentation is hosted on [docs.rs/ferro-jtype](https://docs.rs/ferro-jtype).
 
 ## Build
 
@@ -12,6 +18,10 @@ Ferro-JType is not published on [crates.io](https://crates.io) yet.
 - cargo
 
 ```bash
+git clone https://github.com/NyankoDev/Ferro-JType.git
+
+cd Ferro-JType
+
 cargo build
 ```
 
