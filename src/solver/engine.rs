@@ -15,7 +15,7 @@ pub(crate) fn analyze_class(
     class: &ClassIr,
     config: &InferenceConfig,
 ) -> Result<ClassInference, Error> {
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = class.diagnostics.clone();
     let methods = class
         .methods
         .iter()

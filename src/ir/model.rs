@@ -1,9 +1,12 @@
-use crate::{ClassName, DynamicCallKind, GenericSignature, MethodDescriptor, TypeDescriptor};
+use crate::{
+    ClassName, Diagnostic, DynamicCallKind, GenericSignature, MethodDescriptor, TypeDescriptor,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassIr {
     pub(crate) name: ClassName,
     pub(crate) generic_signature: Option<GenericSignature>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) methods: Vec<MethodIr>,
 }
 

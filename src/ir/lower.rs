@@ -12,19 +12,36 @@ use crate::ir::{
     MethodIr, strip_stack_map_tables,
 };
 use crate::{
-    ClassName, DescriptorError, DynamicCallKind, Error, GenericSignature, MethodDescriptor,
-    TypeDescriptor,
+    ClassName, DescriptorError, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
+    DynamicCallKind, Error, GenericSignature, MethodDescriptor, TypeDescriptor,
 };
 
 pub(crate) fn parse_and_lower(bytes: &[u8]) -> Result<ClassIr, Error> {
-    let bytes = strip_stack_map_tables(bytes)?;
-    let generic_metadata = extract_generic_metadata(&bytes);
+    match strip_stack_map_tables(bytes) {
+        Ok(sanitized) => {
+            parse_lowered_bytes(&sanitized, false).or_else(|_| parse_lowered_bytes(bytes, true))
+        }
+        Err(_) => parse_lowered_bytes(bytes, true),
+    }
+}
+
+fn parse_lowered_bytes(bytes: &[u8], used_recovery: bool) -> Result<ClassIr, Error> {
+    let generic_metadata = extract_generic_metadata(bytes);
     let disassembler = Disassembler::builder()
         .recovery(RecoveryMode::BestEffort)
         .build();
-    let disassembly = disassembler.parse(&bytes)?;
+    let disassembly = disassembler.parse(bytes)?;
     let class = disassembly.class().ok_or(Error::IncompleteClass)?;
-    lower_class(class, &generic_metadata)
+    let mut class = lower_class(class, &generic_metadata)?;
+    if used_recovery {
+        class.diagnostics.push(Diagnostic::new(
+            DiagnosticSeverity::Warning,
+            DiagnosticKind::ParserRecovery,
+            DiagnosticLocation::class_level(),
+            "StackMapTable sanitization could not be used; analyzed original bytes with best-effort recovery",
+        ));
+    }
+    Ok(class)
 }
 
 fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<ClassIr, Error> {
@@ -43,6 +60,7 @@ fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<Clas
     Ok(ClassIr {
         name,
         generic_signature: generic_metadata.class_signature.clone(),
+        diagnostics: Vec::new(),
         methods,
     })
 }
