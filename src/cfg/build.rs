@@ -17,6 +17,7 @@ pub(crate) fn build_cfg(method: &MethodIr) -> CfgBuildResult {
             graph: ControlFlowGraph {
                 blocks: Arena::new(),
                 entry: None,
+                blocks_by_offset: BTreeMap::new(),
             },
             diagnostics: Vec::new(),
         };
@@ -134,7 +135,11 @@ pub(crate) fn build_cfg(method: &MethodIr) -> CfgBuildResult {
 
     let entry = block_by_offset.get(&method.instructions[0].offset).copied();
     CfgBuildResult {
-        graph: ControlFlowGraph { blocks, entry },
+        graph: ControlFlowGraph {
+            blocks,
+            entry,
+            blocks_by_offset: block_by_offset,
+        },
         diagnostics,
     }
 }
@@ -199,11 +204,7 @@ fn ordinary_successors(
             vec![(*target, EdgeKind::Branch)]
         }
         InstructionOperandIr::Branch { target } if is_subroutine_branch(instruction.opcode) => {
-            let mut successors = vec![(*target, EdgeKind::Branch)];
-            if let Some(fall_through) = fall_through {
-                successors.push((fall_through, EdgeKind::FallThrough));
-            }
-            successors
+            vec![(*target, EdgeKind::Branch)]
         }
         InstructionOperandIr::Branch { target } => {
             let mut successors = vec![(*target, EdgeKind::Branch)];
@@ -233,7 +234,7 @@ fn ordinary_successors(
                     .map(|(_, target)| (*target, EdgeKind::Switch)),
             )
             .collect(),
-        _ if terminates_execution(instruction.opcode) => Vec::new(),
+        _ if terminates_execution(instruction.opcode) || is_ret(instruction.opcode) => Vec::new(),
         _ => fall_through
             .map(|target| vec![(target, EdgeKind::FallThrough)])
             .unwrap_or_default(),
@@ -284,7 +285,7 @@ fn invalid_target_diagnostic(method: &MethodIr, source_offset: u16, target: i32)
 }
 
 const fn ends_block(opcode: u8) -> bool {
-    matches!(opcode, 0x99..=0xa8 | 0xaa | 0xab | 0xac..=0xb1 | 0xbf | 0xc6..=0xc9)
+    matches!(opcode, 0x99..=0xa9 | 0xaa | 0xab | 0xac..=0xb1 | 0xbf | 0xc6..=0xc9)
 }
 
 const fn terminates_execution(opcode: u8) -> bool {
@@ -297,6 +298,10 @@ const fn is_unconditional_branch(opcode: u8) -> bool {
 
 const fn is_subroutine_branch(opcode: u8) -> bool {
     matches!(opcode, 0xa8 | 0xc9)
+}
+
+const fn is_ret(opcode: u8) -> bool {
+    opcode == 0xa9
 }
 
 const fn may_throw(opcode: u8) -> bool {

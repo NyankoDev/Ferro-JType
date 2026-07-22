@@ -1,5 +1,5 @@
 use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
-use crate::solver::frame::{Frame, inferred_from_descriptor};
+use crate::solver::frame::{Frame, FrameValue, inferred_from_descriptor};
 use crate::{
     ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, InferredType,
     MethodDescriptor, ReferenceType, ReturnType, TypeDescriptor,
@@ -91,7 +91,7 @@ pub(crate) fn transfer(
             discard(frame, method, instruction, diagnostics);
             discard(frame, method, instruction, diagnostics);
         }
-        0xa8 | 0xc9 => frame.push(InferredType::ReturnAddress),
+        0xa8 | 0xc9 => push_subroutine_return_address(method, instruction, frame),
         0xaa | 0xab => discard(frame, method, instruction, diagnostics),
         0xac..=0xb0 => discard(frame, method, instruction, diagnostics),
         0xb1 | 0xa7 | 0xa9 | 0xc8 => {}
@@ -123,7 +123,7 @@ pub(crate) fn transfer(
 
 fn load_local(instruction: &InstructionIr, frame: &mut Frame, wide_opcode: u8, short_base: u8) {
     let local = local_index(instruction, wide_opcode, short_base).unwrap_or_default();
-    frame.push(frame.get_local(local));
+    frame.push_value(frame.get_local_value(local));
 }
 
 fn store_local(
@@ -134,9 +134,9 @@ fn store_local(
     method: &MethodIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let value = pop(frame, method, instruction, diagnostics);
+    let value = pop_value(frame, method, instruction, diagnostics);
     let local = local_index(instruction, wide_opcode, short_base).unwrap_or_default();
-    frame.set_local(local, value);
+    frame.set_local_value(local, value);
 }
 
 fn local_index(instruction: &InstructionIr, wide_opcode: u8, short_base: u8) -> Option<u16> {
@@ -281,7 +281,7 @@ fn invoke_member(
 ) {
     let Some((descriptor, member)) = method_call_descriptor(instruction, method, diagnostics)
     else {
-        frame.stack.clear();
+        frame.clear_stack();
         return;
     };
 
@@ -319,7 +319,7 @@ fn invoke_dynamic(
         .and_then(|descriptor| MethodDescriptor::parse(descriptor).ok())
     else {
         unsupported(method, instruction, diagnostics);
-        frame.stack.clear();
+        frame.clear_stack();
         return;
     };
 
@@ -538,6 +538,24 @@ fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
     frame.push(value);
 }
 
+fn push_subroutine_return_address(
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    frame: &mut Frame,
+) {
+    let return_target = method
+        .instructions
+        .iter()
+        .skip_while(|candidate| candidate.offset != instruction.offset)
+        .nth(1)
+        .map(|candidate| candidate.offset);
+
+    match return_target {
+        Some(return_target) => frame.push_return_address(return_target),
+        None => frame.push(InferredType::ReturnAddress),
+    }
+}
+
 fn discard(
     frame: &mut Frame,
     method: &MethodIr,
@@ -565,14 +583,23 @@ fn pop(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> InferredType {
-    frame.pop().unwrap_or_else(|| {
+    pop_value(frame, method, instruction, diagnostics).value
+}
+
+fn pop_value(
+    frame: &mut Frame,
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> FrameValue {
+    frame.pop_value().unwrap_or_else(|| {
         diagnostics.push(Diagnostic::new(
             DiagnosticSeverity::Warning,
             DiagnosticKind::StackUnderflow,
             location(method, instruction.offset),
             "instruction consumed a value from an empty operand stack",
         ));
-        InferredType::Conflict
+        FrameValue::plain(InferredType::Conflict)
     })
 }
 
@@ -582,9 +609,9 @@ fn duplicate_top(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let value = pop(frame, method, instruction, diagnostics);
-    frame.push(value.clone());
-    frame.push(value);
+    let value = pop_value(frame, method, instruction, diagnostics);
+    frame.push_value(value.clone());
+    frame.push_value(value);
 }
 
 fn duplicate_x1(
@@ -593,11 +620,11 @@ fn duplicate_x1(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    frame.push(first.clone());
-    frame.push(second);
-    frame.push(first);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    let second = pop_value(frame, method, instruction, diagnostics);
+    frame.push_value(first.clone());
+    frame.push_value(second);
+    frame.push_value(first);
 }
 
 fn duplicate_x2(
@@ -606,18 +633,18 @@ fn duplicate_x2(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    if is_category_two(&second) {
-        frame.push(first.clone());
-        frame.push(second);
-        frame.push(first);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    let second = pop_value(frame, method, instruction, diagnostics);
+    if is_category_two(&second.value) {
+        frame.push_value(first.clone());
+        frame.push_value(second);
+        frame.push_value(first);
     } else {
-        let third = pop(frame, method, instruction, diagnostics);
-        frame.push(first.clone());
-        frame.push(third);
-        frame.push(second);
-        frame.push(first);
+        let third = pop_value(frame, method, instruction, diagnostics);
+        frame.push_value(first.clone());
+        frame.push_value(third);
+        frame.push_value(second);
+        frame.push_value(first);
     }
 }
 
@@ -627,16 +654,16 @@ fn duplicate_two(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    if is_category_two(&first) {
-        frame.push(first.clone());
-        frame.push(first);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    if is_category_two(&first.value) {
+        frame.push_value(first.clone());
+        frame.push_value(first);
     } else {
-        let second = pop(frame, method, instruction, diagnostics);
-        frame.push(second.clone());
-        frame.push(first.clone());
-        frame.push(second);
-        frame.push(first);
+        let second = pop_value(frame, method, instruction, diagnostics);
+        frame.push_value(second.clone());
+        frame.push_value(first.clone());
+        frame.push_value(second);
+        frame.push_value(first);
     }
 }
 
@@ -646,19 +673,19 @@ fn duplicate_two_x1(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    if is_category_two(&first) {
-        frame.push(first.clone());
-        frame.push(second);
-        frame.push(first);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    let second = pop_value(frame, method, instruction, diagnostics);
+    if is_category_two(&first.value) {
+        frame.push_value(first.clone());
+        frame.push_value(second);
+        frame.push_value(first);
     } else {
-        let third = pop(frame, method, instruction, diagnostics);
-        frame.push(second.clone());
-        frame.push(first.clone());
-        frame.push(third);
-        frame.push(second);
-        frame.push(first);
+        let third = pop_value(frame, method, instruction, diagnostics);
+        frame.push_value(second.clone());
+        frame.push_value(first.clone());
+        frame.push_value(third);
+        frame.push_value(second);
+        frame.push_value(first);
     }
 }
 
@@ -668,34 +695,34 @@ fn duplicate_two_x2(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    if is_category_two(&first) && is_category_two(&second) {
-        frame.push(first.clone());
-        frame.push(second);
-        frame.push(first);
-    } else if is_category_two(&first) {
-        let third = pop(frame, method, instruction, diagnostics);
-        frame.push(first.clone());
-        frame.push(third);
-        frame.push(second);
-        frame.push(first);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    let second = pop_value(frame, method, instruction, diagnostics);
+    if is_category_two(&first.value) && is_category_two(&second.value) {
+        frame.push_value(first.clone());
+        frame.push_value(second);
+        frame.push_value(first);
+    } else if is_category_two(&first.value) {
+        let third = pop_value(frame, method, instruction, diagnostics);
+        frame.push_value(first.clone());
+        frame.push_value(third);
+        frame.push_value(second);
+        frame.push_value(first);
     } else {
-        let third = pop(frame, method, instruction, diagnostics);
-        if is_category_two(&third) {
-            frame.push(second.clone());
-            frame.push(first.clone());
-            frame.push(third);
-            frame.push(second);
-            frame.push(first);
+        let third = pop_value(frame, method, instruction, diagnostics);
+        if is_category_two(&third.value) {
+            frame.push_value(second.clone());
+            frame.push_value(first.clone());
+            frame.push_value(third);
+            frame.push_value(second);
+            frame.push_value(first);
         } else {
-            let fourth = pop(frame, method, instruction, diagnostics);
-            frame.push(second.clone());
-            frame.push(first.clone());
-            frame.push(fourth);
-            frame.push(third);
-            frame.push(second);
-            frame.push(first);
+            let fourth = pop_value(frame, method, instruction, diagnostics);
+            frame.push_value(second.clone());
+            frame.push_value(first.clone());
+            frame.push_value(fourth);
+            frame.push_value(third);
+            frame.push_value(second);
+            frame.push_value(first);
         }
     }
 }
@@ -706,10 +733,10 @@ fn swap(
     instruction: &InstructionIr,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let first = pop(frame, method, instruction, diagnostics);
-    let second = pop(frame, method, instruction, diagnostics);
-    frame.push(first);
-    frame.push(second);
+    let first = pop_value(frame, method, instruction, diagnostics);
+    let second = pop_value(frame, method, instruction, diagnostics);
+    frame.push_value(first);
+    frame.push_value(second);
 }
 
 fn unsupported(method: &MethodIr, instruction: &InstructionIr, diagnostics: &mut Vec<Diagnostic>) {

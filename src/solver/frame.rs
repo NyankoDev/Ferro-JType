@@ -1,9 +1,28 @@
+use std::collections::BTreeSet;
+
 use crate::{ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Frame {
     pub(crate) locals: Vec<InferredType>,
     pub(crate) stack: Vec<InferredType>,
+    local_return_targets: Vec<Option<BTreeSet<u16>>>,
+    stack_return_targets: Vec<Option<BTreeSet<u16>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FrameValue {
+    pub(crate) value: InferredType,
+    return_targets: Option<BTreeSet<u16>>,
+}
+
+impl FrameValue {
+    pub(crate) fn plain(value: InferredType) -> Self {
+        Self {
+            value,
+            return_targets: None,
+        }
+    }
 }
 
 pub(crate) struct MergeOutcome {
@@ -37,36 +56,81 @@ impl Frame {
         }
 
         Self {
+            local_return_targets: vec![None; locals.len()],
             locals,
             stack: Vec::new(),
+            stack_return_targets: Vec::new(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn get_local(&self, local: u16) -> InferredType {
-        self.locals
-            .get(usize::from(local))
-            .cloned()
-            .unwrap_or(InferredType::Bottom)
     }
 
     pub(crate) fn set_local(&mut self, local: u16, value: InferredType) {
+        self.set_local_value(local, FrameValue::plain(value));
+    }
+
+    pub(crate) fn get_local_value(&self, local: u16) -> FrameValue {
         let local = usize::from(local);
-        let width = usize::from(matches!(value, InferredType::Long | InferredType::Double)) + 1;
-        self.locals
-            .resize(self.locals.len().max(local + width), InferredType::Bottom);
-        self.locals[local] = value;
-        if width == 2 {
-            self.locals[local + 1] = InferredType::Bottom;
+        FrameValue {
+            value: self
+                .locals
+                .get(local)
+                .cloned()
+                .unwrap_or(InferredType::Bottom),
+            return_targets: self
+                .local_return_targets
+                .get(local)
+                .cloned()
+                .unwrap_or(None),
         }
     }
 
-    pub(crate) fn pop(&mut self) -> Option<InferredType> {
-        self.stack.pop()
+    pub(crate) fn set_local_value(&mut self, local: u16, value: FrameValue) {
+        let local = usize::from(local);
+        let width = usize::from(matches!(
+            &value.value,
+            InferredType::Long | InferredType::Double
+        )) + 1;
+        let length = self.locals.len().max(local + width);
+        self.locals.resize(length, InferredType::Bottom);
+        self.local_return_targets.resize(length, None);
+        self.locals[local] = value.value;
+        self.local_return_targets[local] = value.return_targets;
+        if width == 2 {
+            self.locals[local + 1] = InferredType::Bottom;
+            self.local_return_targets[local + 1] = None;
+        }
     }
 
     pub(crate) fn push(&mut self, value: InferredType) {
-        self.stack.push(value);
+        self.push_value(FrameValue::plain(value));
+    }
+
+    pub(crate) fn pop_value(&mut self) -> Option<FrameValue> {
+        let value = self.stack.pop()?;
+        let return_targets = self.stack_return_targets.pop().unwrap_or(None);
+        Some(FrameValue {
+            value,
+            return_targets,
+        })
+    }
+
+    pub(crate) fn push_value(&mut self, value: FrameValue) {
+        self.stack.push(value.value);
+        self.stack_return_targets.push(value.return_targets);
+    }
+
+    pub(crate) fn push_return_address(&mut self, target: u16) {
+        self.stack.push(InferredType::ReturnAddress);
+        self.stack_return_targets
+            .push(Some(BTreeSet::from([target])));
+    }
+
+    pub(crate) fn clear_stack(&mut self) {
+        self.stack.clear();
+        self.stack_return_targets.clear();
+    }
+
+    pub(crate) fn local_return_targets(&self, local: u16) -> Option<&BTreeSet<u16>> {
+        self.local_return_targets.get(usize::from(local))?.as_ref()
     }
 
     pub(crate) fn replace_uninitialized(&mut self, allocation_offset: u16, class_name: ClassName) {
@@ -91,6 +155,8 @@ impl Frame {
                 Some(class_name) => ReferenceType::Exact(class_name),
                 None => ReferenceType::Exact(ClassName::java_lang_throwable()),
             })],
+            local_return_targets: self.local_return_targets.clone(),
+            stack_return_targets: vec![None],
         }
     }
 
@@ -99,8 +165,20 @@ impl Frame {
 
         let local_count = self.locals.len().max(incoming.locals.len());
         self.locals.resize(local_count, InferredType::Bottom);
+        self.local_return_targets.resize(local_count, None);
         for (index, value) in incoming.locals.iter().enumerate() {
+            let existing = self.locals[index].clone();
             let merged = self.locals[index].join(value);
+            self.local_return_targets[index] = merged_return_targets(
+                &existing,
+                self.local_return_targets[index].as_ref(),
+                value,
+                incoming
+                    .local_return_targets
+                    .get(index)
+                    .and_then(Option::as_ref),
+                &merged,
+            );
             if merged != self.locals[index] {
                 self.locals[index] = merged;
             }
@@ -111,13 +189,26 @@ impl Frame {
             let merged = vec![InferredType::Conflict; stack_len];
             if self.stack != merged {
                 self.stack = merged;
+                self.stack_return_targets = vec![None; stack_len];
             }
             stack_height_mismatch = true;
         } else {
-            for (existing, value) in self.stack.iter_mut().zip(&incoming.stack) {
+            for index in 0..self.stack.len() {
+                let existing = self.stack[index].clone();
+                let value = &incoming.stack[index];
                 let merged = existing.join(value);
-                if merged != *existing {
-                    *existing = merged;
+                self.stack_return_targets[index] = merged_return_targets(
+                    &existing,
+                    self.stack_return_targets[index].as_ref(),
+                    value,
+                    incoming
+                        .stack_return_targets
+                        .get(index)
+                        .and_then(Option::as_ref),
+                    &merged,
+                );
+                if merged != self.stack[index] {
+                    self.stack[index] = merged;
                 }
             }
         }
@@ -126,6 +217,32 @@ impl Frame {
             stack_height_mismatch,
         }
     }
+}
+
+fn merged_return_targets(
+    existing: &InferredType,
+    existing_targets: Option<&BTreeSet<u16>>,
+    incoming: &InferredType,
+    incoming_targets: Option<&BTreeSet<u16>>,
+    merged: &InferredType,
+) -> Option<BTreeSet<u16>> {
+    if !matches!(merged, InferredType::ReturnAddress) {
+        return None;
+    }
+
+    let mut targets = BTreeSet::new();
+    let mut known = true;
+    for (value, candidate) in [(existing, existing_targets), (incoming, incoming_targets)] {
+        if matches!(value, InferredType::ReturnAddress) {
+            let Some(candidate) = candidate else {
+                known = false;
+                continue;
+            };
+            targets.extend(candidate.iter().copied());
+        }
+    }
+
+    known.then_some(targets)
 }
 
 pub(crate) fn inferred_from_descriptor(descriptor: &TypeDescriptor) -> InferredType {

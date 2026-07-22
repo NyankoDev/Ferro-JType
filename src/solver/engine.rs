@@ -138,6 +138,17 @@ fn analyze_method(
                 worklist.push_back(edge.target);
             }
         }
+
+        let last_instruction = &method.instructions[block.instruction_range.end - 1];
+        propagate_subroutine_return(
+            &graph,
+            last_instruction,
+            &frame,
+            &mut incoming,
+            method,
+            &mut diagnostics,
+            &mut worklist,
+        );
     }
 
     let observations = observe_final_frames(method, &graph, &incoming);
@@ -179,6 +190,61 @@ fn propagate_exception_edges(
             diagnostics,
         ) {
             worklist.push_back(edge.target);
+        }
+    }
+}
+
+fn propagate_subroutine_return(
+    graph: &crate::cfg::ControlFlowGraph,
+    instruction: &InstructionIr,
+    frame: &Frame,
+    incoming: &mut HashMap<crate::cfg::BlockId, Frame>,
+    method: &MethodIr,
+    diagnostics: &mut Vec<Diagnostic>,
+    worklist: &mut VecDeque<crate::cfg::BlockId>,
+) {
+    if instruction.opcode != 0xa9 {
+        return;
+    }
+
+    let InstructionOperandIr::Local(local) = instruction.operand else {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticSeverity::Warning,
+            DiagnosticKind::InvalidControlFlow,
+            location(method, instruction.offset),
+            "ret instruction does not identify a local-variable slot",
+        ));
+        return;
+    };
+    let Some(targets) = frame.local_return_targets(local) else {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticSeverity::Warning,
+            DiagnosticKind::InvalidControlFlow,
+            location(method, instruction.offset),
+            format!("ret local slot {local} has no known return address"),
+        ));
+        return;
+    };
+
+    for target_offset in targets {
+        let Some(target) = graph.block_at_offset(*target_offset) else {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticSeverity::Warning,
+                DiagnosticKind::InvalidControlFlow,
+                location(method, instruction.offset),
+                format!("ret target {target_offset} does not identify an instruction"),
+            ));
+            continue;
+        };
+        if merge_frame(
+            incoming,
+            target,
+            frame.clone(),
+            method,
+            instruction.offset,
+            diagnostics,
+        ) {
+            worklist.push_back(target);
         }
     }
 }
@@ -366,4 +432,8 @@ fn limit_diagnostic(method: &MethodIr, limit: &str) -> Diagnostic {
         DiagnosticLocation::method(&method.name, &method.descriptor_text),
         format!("analysis stopped after reaching the {limit}"),
     )
+}
+
+fn location(method: &MethodIr, offset: u16) -> DiagnosticLocation {
+    DiagnosticLocation::method(&method.name, &method.descriptor_text).at_offset(offset)
 }
