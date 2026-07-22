@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::cfg::{EdgeKind, build_cfg};
-use crate::ir::{ClassIr, MethodIr, VerificationFrameIr};
+use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MethodIr, VerificationFrameIr};
 use crate::solver::frame::{Frame, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::{
-    ClassInference, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, Error,
-    InferenceConfig, InferredType, InstructionInference, MethodInference,
+    ClassInference, ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
+    Error, InferenceConfig, InferredType, InstructionInference, MethodInference, ReferenceType,
 };
 
 pub(crate) fn analyze_class(
@@ -154,12 +154,7 @@ fn analyze_method(
         }
     }
 
-    let local_types = collect_local_types(
-        &incoming,
-        &observations,
-        entry_frame.locals,
-        &method.verification_frames,
-    );
+    let local_types = collect_local_types(&incoming, &observations, entry_frame.locals, method);
     let instructions = observations.into_values().collect();
     (
         MethodInference::new(
@@ -212,7 +207,7 @@ fn collect_local_types(
     incoming: &HashMap<crate::cfg::BlockId, Frame>,
     observations: &BTreeMap<u16, InstructionInference>,
     entry_locals: Vec<InferredType>,
-    verification_frames: &BTreeMap<u16, VerificationFrameIr>,
+    method: &MethodIr,
 ) -> Vec<InferredType> {
     let mut locals = entry_locals;
     for frame in incoming.values() {
@@ -222,7 +217,7 @@ fn collect_local_types(
         merge_locals(&mut locals, observation.local_types());
     }
     let mut verification_locals = Vec::new();
-    for frame in verification_frames.values() {
+    for frame in method.verification_frames.values() {
         merge_locals(&mut verification_locals, &frame.locals);
     }
     for (local, verification) in locals.iter_mut().zip(&verification_locals) {
@@ -230,7 +225,102 @@ fn collect_local_types(
             *local = verification.clone();
         }
     }
+    refine_catch_local_types(&mut locals, incoming, observations, method);
     locals
+}
+
+fn refine_catch_local_types(
+    locals: &mut [InferredType],
+    incoming: &HashMap<crate::cfg::BlockId, Frame>,
+    observations: &BTreeMap<u16, InstructionInference>,
+    method: &MethodIr,
+) {
+    for (slot, catch_types) in catch_local_types(method) {
+        let Some(local) = locals.get_mut(usize::from(slot)) else {
+            continue;
+        };
+        if catch_types.len() > 1
+            && matches!(local, InferredType::Reference(ReferenceType::Unknown))
+            && local_values_are_catch_types(slot, &catch_types, incoming, observations)
+        {
+            *local =
+                InferredType::Reference(ReferenceType::Exact(ClassName::java_lang_throwable()));
+        }
+    }
+}
+
+fn catch_local_types(method: &MethodIr) -> BTreeMap<u16, BTreeSet<ClassName>> {
+    let mut catch_locals = BTreeMap::new();
+    for handler in &method.exception_handlers {
+        let Some(instruction) = method
+            .instructions
+            .iter()
+            .find(|instruction| instruction.offset == handler.handler_offset)
+        else {
+            continue;
+        };
+        let Some(slot) = reference_store_local(instruction) else {
+            continue;
+        };
+
+        catch_locals
+            .entry(slot)
+            .or_insert_with(BTreeSet::new)
+            .insert(
+                handler
+                    .catch_type
+                    .clone()
+                    .unwrap_or_else(ClassName::java_lang_throwable),
+            );
+    }
+    catch_locals
+}
+
+fn reference_store_local(instruction: &InstructionIr) -> Option<u16> {
+    match instruction {
+        InstructionIr {
+            opcode: 0x3a,
+            operand: InstructionOperandIr::Local(slot),
+            ..
+        } => Some(*slot),
+        InstructionIr {
+            opcode: 0x4b..=0x4e,
+            ..
+        } => Some(u16::from(instruction.opcode - 0x4b)),
+        _ => None,
+    }
+}
+
+fn local_values_are_catch_types(
+    slot: u16,
+    catch_types: &BTreeSet<ClassName>,
+    incoming: &HashMap<crate::cfg::BlockId, Frame>,
+    observations: &BTreeMap<u16, InstructionInference>,
+) -> bool {
+    let mut saw_catch_value = false;
+    for values in incoming
+        .values()
+        .map(|frame| frame.locals.as_slice())
+        .chain(
+            observations
+                .values()
+                .map(|instruction| instruction.local_types()),
+        )
+    {
+        let Some(value) = values.get(usize::from(slot)) else {
+            continue;
+        };
+        match value {
+            InferredType::Bottom => {}
+            InferredType::Reference(ReferenceType::Exact(class_name))
+                if catch_types.contains(class_name) =>
+            {
+                saw_catch_value = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_catch_value
 }
 
 fn merge_locals(destination: &mut Vec<InferredType>, source: &[InferredType]) {

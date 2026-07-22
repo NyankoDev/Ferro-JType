@@ -13,6 +13,10 @@ impl ClassName {
         Self("java/lang/String".to_owned())
     }
 
+    pub(crate) fn java_lang_throwable() -> Self {
+        Self("java/lang/Throwable".to_owned())
+    }
+
     /// Parses and validates a JVM internal class name.
     ///
     /// Empty names and descriptor-only punctuation are rejected. The value is
