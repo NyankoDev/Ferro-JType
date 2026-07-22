@@ -1,4 +1,15 @@
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+//! Type inference for Java class-file bytecode.
+//!
+//! Use [`infer_class`] for the default analysis configuration, or [`Inferer`]
+//! when analysis limits or strict diagnostic handling need to be customized.
+//! The returned [`ClassInference`] exposes inferred method, local-variable, and
+//! operand-stack types without requiring a JDK, Java runtime, or external class
+//! hierarchy.
+//!
+//! Class names use the JVM internal form, such as `java/lang/String`.
 
 mod api;
 mod cfg;

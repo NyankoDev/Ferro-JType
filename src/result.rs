@@ -1,5 +1,10 @@
 use crate::{ClassName, Diagnostic, InferredType, MethodDescriptor, ReturnType};
 
+/// Type-inference results for one Java class file.
+///
+/// Diagnostics describe recoverable conditions observed while processing the
+/// class. Inspect them when consuming inference from malformed, unsupported,
+/// or intentionally obfuscated bytecode.
 #[derive(Debug, Clone)]
 pub struct ClassInference {
     class_name: ClassName,
@@ -20,22 +25,29 @@ impl ClassInference {
         }
     }
 
+    /// Returns the JVM internal name of the analyzed class.
     #[must_use]
     pub const fn class_name(&self) -> &ClassName {
         &self.class_name
     }
 
+    /// Returns one inference result for each method in the class file.
     #[must_use]
     pub fn methods(&self) -> &[MethodInference] {
         &self.methods
     }
 
+    /// Returns diagnostics emitted while analyzing the class.
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
 }
 
+/// Type-inference results for one method.
+///
+/// Parameter and return types come from the method descriptor. Local-variable
+/// and instruction states are inferred from the method's bytecode.
 #[derive(Debug, Clone)]
 pub struct MethodInference {
     name: String,
@@ -65,37 +77,47 @@ impl MethodInference {
         }
     }
 
+    /// Returns the method name as stored in the class file.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the parsed JVM method descriptor.
     #[must_use]
     pub const fn descriptor(&self) -> &MethodDescriptor {
         &self.descriptor
     }
 
+    /// Returns the descriptor-derived parameter types in declaration order.
     #[must_use]
     pub fn parameter_types(&self) -> &[InferredType] {
         &self.parameter_types
     }
 
+    /// Returns the descriptor-derived method return type.
     #[must_use]
     pub const fn return_type(&self) -> &ReturnType {
         &self.return_type
     }
 
+    /// Returns inferred local-variable types indexed by JVM local slot.
     #[must_use]
     pub fn local_types(&self) -> &[InferredType] {
         &self.local_types
     }
 
+    /// Returns type states for modeled bytecode instructions.
     #[must_use]
     pub fn instructions(&self) -> &[InstructionInference] {
         &self.instructions
     }
 }
 
+/// Inferred abstract state at one bytecode instruction.
+///
+/// The local-variable and operand-stack slices describe the state immediately
+/// before and immediately after the instruction at [`Self::bytecode_offset`].
 #[derive(Debug, Clone)]
 pub struct InstructionInference {
     bytecode_offset: u16,
@@ -119,21 +141,25 @@ impl InstructionInference {
         }
     }
 
+    /// Returns this instruction's offset within its method's `Code` attribute.
     #[must_use]
     pub const fn bytecode_offset(&self) -> u16 {
         self.bytecode_offset
     }
 
+    /// Returns local-variable types immediately before this instruction.
     #[must_use]
     pub fn local_types(&self) -> &[InferredType] {
         &self.local_types
     }
 
+    /// Returns operand-stack types immediately before this instruction.
     #[must_use]
     pub fn stack_before(&self) -> &[InferredType] {
         &self.stack_before
     }
 
+    /// Returns operand-stack types immediately after this instruction.
     #[must_use]
     pub fn stack_after(&self) -> &[InferredType] {
         &self.stack_after

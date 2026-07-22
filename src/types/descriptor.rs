@@ -1,18 +1,30 @@
 use crate::{ClassName, DescriptorError};
 
+/// A JVM primitive type from a field or method descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveType {
+    /// The `Z` descriptor type.
     Boolean,
+    /// The `B` descriptor type.
     Byte,
+    /// The `C` descriptor type.
     Char,
+    /// The `S` descriptor type.
     Short,
+    /// The `I` descriptor type.
     Int,
+    /// The `F` descriptor type.
     Float,
+    /// The `J` descriptor type.
     Long,
+    /// The `D` descriptor type.
     Double,
 }
 
 impl PrimitiveType {
+    /// Returns the number of JVM local-variable or operand-stack slots used.
+    ///
+    /// `long` and `double` use two slots; every other primitive uses one.
     #[must_use]
     pub const fn slot_width(self) -> u8 {
         match self {
@@ -22,17 +34,27 @@ impl PrimitiveType {
     }
 }
 
+/// A non-void JVM field type descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDescriptor {
+    /// A primitive descriptor type.
     Primitive(PrimitiveType),
+    /// A reference to a class identified by its JVM internal name.
     Reference(ClassName),
+    /// An array descriptor with its dimension count and element descriptor.
     Array {
+        /// Number of leading `[` characters in the descriptor.
         dimensions: u8,
+        /// Type stored at the array's innermost dimension.
         element: Box<TypeDescriptor>,
     },
 }
 
 impl TypeDescriptor {
+    /// Parses one complete non-void JVM field descriptor.
+    ///
+    /// For example, `I` describes an integer and `[Ljava/lang/String;`
+    /// describes an array of strings.
     pub fn parse(input: &str) -> Result<Self, DescriptorError> {
         let mut parser = DescriptorParser::new(input);
         let descriptor = parser.parse_field_type()?;
@@ -46,6 +68,7 @@ impl TypeDescriptor {
         Ok(descriptor)
     }
 
+    /// Returns the number of JVM local-variable or operand-stack slots used.
     #[must_use]
     pub const fn slot_width(&self) -> u8 {
         match self {
@@ -55,12 +78,16 @@ impl TypeDescriptor {
     }
 }
 
+/// A JVM method return descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReturnType {
+    /// The `V` method return descriptor.
     Void,
+    /// A method that returns a non-void value.
     Type(TypeDescriptor),
 }
 
+/// A parsed JVM method descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MethodDescriptor {
     parameters: Vec<TypeDescriptor>,
@@ -68,6 +95,10 @@ pub struct MethodDescriptor {
 }
 
 impl MethodDescriptor {
+    /// Parses one complete JVM method descriptor.
+    ///
+    /// For example, `(I)Ljava/lang/String;` describes a method that accepts an
+    /// integer and returns a string.
     pub fn parse(input: &str) -> Result<Self, DescriptorError> {
         let mut parser = DescriptorParser::new(input);
         parser.expect('(')?;
@@ -95,16 +126,21 @@ impl MethodDescriptor {
         })
     }
 
+    /// Returns parameter descriptors in declaration order.
     #[must_use]
     pub fn parameters(&self) -> &[TypeDescriptor] {
         &self.parameters
     }
 
+    /// Returns the method's return descriptor.
     #[must_use]
     pub const fn return_type(&self) -> &ReturnType {
         &self.return_type
     }
 
+    /// Returns the combined JVM slot width of all parameters.
+    ///
+    /// This does not include an instance method's implicit `this` parameter.
     #[must_use]
     pub fn parameter_slot_count(&self) -> u16 {
         self.parameters
