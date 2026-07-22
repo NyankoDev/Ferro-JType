@@ -78,6 +78,7 @@ pub struct MethodInference {
     parameter_types: Vec<InferredType>,
     return_type: ReturnType,
     inferred_return_type: Option<InferredType>,
+    returned_parameter_index: Option<usize>,
     local_types: Vec<InferredType>,
     instructions: Vec<InstructionInference>,
 }
@@ -89,6 +90,7 @@ pub(crate) struct MethodHeader {
     pub(crate) parameter_types: Vec<InferredType>,
     pub(crate) return_type: ReturnType,
     pub(crate) inferred_return_type: Option<InferredType>,
+    pub(crate) returned_parameter_index: Option<usize>,
 }
 
 impl MethodInference {
@@ -106,6 +108,7 @@ impl MethodInference {
             parameter_types: header.parameter_types,
             return_type: header.return_type,
             inferred_return_type: header.inferred_return_type,
+            returned_parameter_index: header.returned_parameter_index,
             local_types,
             instructions,
         }
@@ -158,9 +161,20 @@ impl MethodInference {
         self.inferred_return_type.as_ref()
     }
 
+    /// Returns the parameter index returned unchanged by every reachable value return.
+    ///
+    /// This enables direct-call inference to use an argument's actual type. The
+    /// index is in declaration order and excludes an instance method's implicit
+    /// `this` receiver. `None` means no single parameter source was proven.
+    #[must_use]
+    pub const fn returned_parameter_index(&self) -> Option<usize> {
+        self.returned_parameter_index
+    }
+
     pub(crate) fn mark_analysis_incomplete(&mut self) {
         self.analysis_complete = false;
         self.inferred_return_type = None;
+        self.returned_parameter_index = None;
     }
 
     /// Returns inferred local-variable types indexed by JVM local slot.

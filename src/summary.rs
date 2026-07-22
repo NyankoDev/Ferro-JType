@@ -31,6 +31,22 @@ pub trait MethodSummaryResolver: Send + Sync {
         let _ = invocation_kind;
         self.return_type(owner, name, descriptor)
     }
+
+    /// Returns an argument index propagated unchanged by one invocation.
+    ///
+    /// The default reports no parameter relation. A returned index uses the
+    /// method descriptor's declaration order and excludes an instance
+    /// receiver.
+    fn returned_parameter_index_for_invocation(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+    ) -> Option<usize> {
+        let _ = (owner, name, descriptor, invocation_kind);
+        None
+    }
 }
 
 /// Resolves a caller-supplied inferred value type for one static field read.

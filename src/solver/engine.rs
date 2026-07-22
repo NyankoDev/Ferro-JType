@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use crate::cfg::{EdgeKind, build_cfg};
 use crate::ir::{InstructionIr, InstructionOperandIr, MethodIr};
 use crate::result::MethodHeader;
-use crate::solver::frame::{Frame, inferred_from_descriptor};
+use crate::solver::frame::{Frame, ValueOrigin, inferred_from_descriptor};
 use crate::solver::transfer::transfer;
 use crate::types::join_local_types;
 use crate::{
@@ -48,6 +48,7 @@ pub(super) fn analyze_method(
                     parameter_types,
                     return_type: method.descriptor.return_type().clone(),
                     inferred_return_type: None,
+                    returned_parameter_index: None,
                 },
                 entry_frame.locals,
                 Vec::new(),
@@ -168,15 +169,18 @@ pub(super) fn analyze_method(
         observe_final_frames(method, &graph, &incoming, method_summaries, field_summaries);
     let local_types = collect_local_types(
         &incoming,
-        &observations,
+        &observations.instructions,
         entry_frame.locals,
         method,
         hierarchy,
     );
     let inferred_return_type = analysis_complete
-        .then(|| collect_inferred_return_type(method, &observations, hierarchy))
+        .then(|| collect_inferred_return_type(method, &observations.instructions, hierarchy))
         .flatten();
-    let instructions = observations.into_values().collect();
+    let returned_parameter_index = inferred_return_type
+        .as_ref()
+        .and_then(|_| collect_returned_parameter_index(method, &observations.return_origins));
+    let instructions = observations.instructions.into_values().collect();
     (
         MethodInference::new(
             method.name.clone(),
@@ -187,6 +191,7 @@ pub(super) fn analyze_method(
                 parameter_types,
                 return_type: method.descriptor.return_type().clone(),
                 inferred_return_type,
+                returned_parameter_index,
             },
             local_types,
             instructions,
@@ -335,8 +340,9 @@ fn observe_final_frames(
     incoming: &HashMap<crate::cfg::BlockId, Frame>,
     method_summaries: Option<&dyn crate::MethodSummaryResolver>,
     field_summaries: Option<&dyn crate::FieldSummaryResolver>,
-) -> BTreeMap<u16, InstructionInference> {
+) -> FinalObservations {
     let mut observations = BTreeMap::new();
+    let mut return_origins = BTreeMap::new();
     let mut ignored_diagnostics = Vec::new();
 
     for (block_id, block) in graph.blocks.iter() {
@@ -347,6 +353,12 @@ fn observe_final_frames(
 
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
+            if matches!(instruction.opcode, 0xac..=0xb0) {
+                return_origins.insert(
+                    instruction.offset,
+                    before.top_value().and_then(|value| value.local_origin),
+                );
+            }
             transfer(
                 method,
                 instruction,
@@ -368,7 +380,15 @@ fn observe_final_frames(
         }
     }
 
-    observations
+    FinalObservations {
+        instructions: observations,
+        return_origins,
+    }
+}
+
+struct FinalObservations {
+    instructions: BTreeMap<u16, InstructionInference>,
+    return_origins: BTreeMap<u16, Option<ValueOrigin>>,
 }
 
 fn collect_inferred_return_type(
@@ -403,6 +423,43 @@ fn collect_inferred_return_type(
     }
 
     inferred_return_type
+}
+
+fn collect_returned_parameter_index(
+    method: &MethodIr,
+    return_origins: &BTreeMap<u16, Option<ValueOrigin>>,
+) -> Option<usize> {
+    let mut parameter_index = None;
+    for instruction in method
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.opcode, 0xac..=0xb0))
+    {
+        let ValueOrigin::Entry(slot) =
+            return_origins.get(&instruction.offset).copied().flatten()?
+        else {
+            return None;
+        };
+        let index = parameter_index_for_local_slot(method, slot)?;
+        if let Some(previous) = parameter_index
+            && previous != index
+        {
+            return None;
+        }
+        parameter_index = Some(index);
+    }
+    parameter_index
+}
+
+fn parameter_index_for_local_slot(method: &MethodIr, local_slot: u16) -> Option<usize> {
+    let mut slot = u16::from(method.access_flags & 0x0008 == 0);
+    for (index, parameter) in method.descriptor.parameters().iter().enumerate() {
+        if slot == local_slot {
+            return Some(index);
+        }
+        slot = slot.checked_add(u16::from(parameter.slot_width()))?;
+    }
+    None
 }
 
 fn return_opcode_matches_descriptor(opcode: u8, descriptor: &TypeDescriptor) -> bool {

@@ -307,9 +307,12 @@ fn invoke_member(
         return;
     };
 
-    for _ in descriptor.parameters() {
-        discard(frame, method, instruction, diagnostics);
-    }
+    let mut arguments = descriptor
+        .parameters()
+        .iter()
+        .map(|_| pop(frame, method, instruction, diagnostics))
+        .collect::<Vec<_>>();
+    arguments.reverse();
 
     let receiver =
         (instruction.opcode != 0xb8).then(|| pop(frame, method, instruction, diagnostics));
@@ -327,13 +330,28 @@ fn invoke_member(
         }
     }
 
-    let summary_return_type =
-        MethodInvocationKind::from_opcode(instruction.opcode).and_then(|invocation_kind| {
-            member.and_then(|member| {
-                resolve_method_summary(member, &descriptor, method_summaries, invocation_kind)
-            })
-        });
-    push_return_type(&descriptor, summary_return_type, frame);
+    let invocation_kind = MethodInvocationKind::from_opcode(instruction.opcode);
+    let summary_return_type = invocation_kind.and_then(|invocation_kind| {
+        member.and_then(|member| {
+            resolve_method_summary(member, &descriptor, method_summaries, invocation_kind)
+        })
+    });
+    let parameter_return_type = invocation_kind.and_then(|invocation_kind| {
+        member.and_then(|member| {
+            resolve_returned_parameter(
+                member,
+                &descriptor,
+                method_summaries,
+                invocation_kind,
+                &arguments,
+            )
+        })
+    });
+    push_return_type(
+        &descriptor,
+        parameter_return_type.or(summary_return_type),
+        frame,
+    );
 }
 
 fn invoke_dynamic(
@@ -395,6 +413,26 @@ fn resolve_method_summary(
     };
     let return_type =
         method_summaries?.return_type_for_invocation(owner, name, descriptor, invocation_kind)?;
+    method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
+}
+
+fn resolve_returned_parameter(
+    member: &MemberRefIr,
+    descriptor: &MethodDescriptor,
+    method_summaries: Option<&dyn MethodSummaryResolver>,
+    invocation_kind: MethodInvocationKind,
+    arguments: &[InferredType],
+) -> Option<InferredType> {
+    let MemberRefIr::Resolved { owner, name, .. } = member else {
+        return None;
+    };
+    let parameter_index = method_summaries?.returned_parameter_index_for_invocation(
+        owner,
+        name,
+        descriptor,
+        invocation_kind,
+    )?;
+    let return_type = arguments.get(parameter_index)?.clone();
     method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
 }
 

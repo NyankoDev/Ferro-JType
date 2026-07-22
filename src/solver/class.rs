@@ -20,6 +20,7 @@ pub(crate) fn analyze_class(
     let callers = local_summary_callers(class, &method_indices);
     let field_readers = local_field_readers(class);
     let mut summaries = MethodSummaries::new();
+    let mut returned_parameters = HashMap::new();
     let mut field_summaries = FieldSummaries::new();
     let mut analyses = (0..class.methods.len())
         .map(|_| None)
@@ -46,6 +47,7 @@ pub(crate) fn analyze_class(
                 owner: &class.name,
                 methods: &class.methods,
                 method_indices: &method_indices,
+                returned_parameters: &returned_parameters,
             };
             let field_resolver =
                 StaticFieldResolver::new(config.field_summaries(), &field_summaries);
@@ -58,6 +60,8 @@ pub(crate) fn analyze_class(
             )
         };
         let summary_changed = update_local_method_summary(&mut summaries, &class.name, &inference);
+        let parameter_return_changed =
+            update_local_parameter_return(&mut returned_parameters, &inference);
         let changed_fields = update_local_static_field_summaries(
             class,
             &class.methods[method_index],
@@ -67,7 +71,7 @@ pub(crate) fn analyze_class(
         );
         analyses[method_index] = Some((inference, method_diagnostics));
 
-        if summary_changed {
+        if summary_changed || parameter_return_changed {
             for caller in &callers[method_index] {
                 if !scheduled[*caller] {
                     scheduled[*caller] = true;
@@ -134,6 +138,7 @@ struct ClassSummaryResolver<'a> {
     owner: &'a ClassName,
     methods: &'a [MethodIr],
     method_indices: &'a HashMap<MethodKey, usize>,
+    returned_parameters: &'a HashMap<MethodKey, usize>,
 }
 
 impl MethodSummaryResolver for ClassSummaryResolver<'_> {
@@ -172,6 +177,42 @@ impl MethodSummaryResolver for ClassSummaryResolver<'_> {
                 .flatten()
             })
     }
+
+    fn returned_parameter_index_for_invocation(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+    ) -> Option<usize> {
+        if self
+            .external
+            .and_then(|resolver| {
+                resolver.return_type_for_invocation(owner, name, descriptor, invocation_kind)
+            })
+            .is_some()
+        {
+            return None;
+        }
+        local_call_is_deterministic(
+            self.owner,
+            self.methods,
+            self.method_indices,
+            owner,
+            name,
+            descriptor,
+            invocation_kind,
+        )
+        .then(|| {
+            self.returned_parameters
+                .get(&MethodKey {
+                    name: name.to_owned(),
+                    descriptor: descriptor.clone(),
+                })
+                .copied()
+        })
+        .flatten()
+    }
 }
 
 fn update_local_method_summary(
@@ -196,6 +237,29 @@ fn update_local_method_summary(
         }
         None => {
             summaries.remove_return_type(owner, method.name(), method.descriptor());
+        }
+    }
+    true
+}
+
+fn update_local_parameter_return(
+    returned_parameters: &mut HashMap<MethodKey, usize>,
+    method: &MethodInference,
+) -> bool {
+    let key = MethodKey {
+        name: method.name().to_owned(),
+        descriptor: method.descriptor().clone(),
+    };
+    let next = method.returned_parameter_index();
+    if returned_parameters.get(&key).copied() == next {
+        return false;
+    }
+    match next {
+        Some(index) => {
+            returned_parameters.insert(key, index);
+        }
+        None => {
+            returned_parameters.remove(&key);
         }
     }
     true
