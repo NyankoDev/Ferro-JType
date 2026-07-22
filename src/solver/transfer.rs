@@ -265,12 +265,13 @@ fn invoke_member(
         discard(frame, method, instruction, diagnostics);
     }
 
-    let receiver = pop(frame, method, instruction, diagnostics);
+    let receiver =
+        (instruction.opcode != 0xb8).then(|| pop(frame, method, instruction, diagnostics));
     if let (
         Some(MemberRefIr::Resolved { name, owner, .. }),
-        InferredType::Uninitialized {
+        Some(InferredType::Uninitialized {
             allocation_offset, ..
-        },
+        }),
     ) = (member, receiver)
         && name == "<init>"
     {
