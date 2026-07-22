@@ -288,15 +288,18 @@ fn invoke_member(
 
     let receiver =
         (instruction.opcode != 0xb8).then(|| pop(frame, method, instruction, diagnostics));
-    if let (
-        Some(MemberRefIr::Resolved { name, owner, .. }),
-        Some(InferredType::Uninitialized {
-            allocation_offset, ..
-        }),
-    ) = (member, receiver)
+    if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, receiver)
         && name == "<init>"
     {
-        frame.replace_uninitialized(allocation_offset, owner.clone());
+        match receiver {
+            InferredType::Uninitialized {
+                allocation_offset, ..
+            } => frame.replace_uninitialized(allocation_offset, owner.clone()),
+            InferredType::UninitializedThis { class_name } => {
+                frame.replace_uninitialized_this(class_name)
+            }
+            _ => {}
+        }
     }
 
     push_return_type(&descriptor, frame);

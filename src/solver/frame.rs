@@ -47,6 +47,7 @@ pub(crate) struct MergeOutcome {
 impl Frame {
     pub(crate) fn entry(
         owner: &ClassName,
+        is_constructor: bool,
         descriptor: &MethodDescriptor,
         access_flags: u16,
         max_locals: u16,
@@ -56,7 +57,13 @@ impl Frame {
 
         if access_flags & 0x0008 == 0 {
             locals.resize(slot + 1, InferredType::Bottom);
-            locals[slot] = InferredType::Reference(ReferenceType::Exact(owner.clone()));
+            locals[slot] = if is_constructor {
+                InferredType::UninitializedThis {
+                    class_name: owner.clone(),
+                }
+            } else {
+                InferredType::Reference(ReferenceType::Exact(owner.clone()))
+            };
             slot += 1;
         }
 
@@ -198,6 +205,15 @@ impl Frame {
                     ..
                 } if *candidate == allocation_offset
             ) {
+                *value = initialized.clone();
+            }
+        }
+    }
+
+    pub(crate) fn replace_uninitialized_this(&mut self, class_name: ClassName) {
+        let initialized = InferredType::Reference(ReferenceType::Exact(class_name));
+        for value in self.locals.iter_mut().chain(self.stack.iter_mut()) {
+            if matches!(value, InferredType::UninitializedThis { .. }) {
                 *value = initialized.clone();
             }
         }

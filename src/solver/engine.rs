@@ -53,6 +53,7 @@ fn analyze_method(
     let mut diagnostics = cfg_result.diagnostics;
     let entry_frame = Frame::entry(
         owner,
+        method.name == "<init>",
         &method.descriptor,
         method.access_flags,
         method.max_locals,

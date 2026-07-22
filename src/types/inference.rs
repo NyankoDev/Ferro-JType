@@ -68,6 +68,12 @@ pub enum InferredType {
         /// Bytecode offset of the allocation instruction.
         allocation_offset: u16,
     },
+    /// The receiver of an instance constructor before its parent constructor
+    /// has completed.
+    UninitializedThis {
+        /// Class whose constructor owns this receiver.
+        class_name: ClassName,
+    },
     /// A return address used by legacy `jsr` and `ret` bytecode.
     ReturnAddress,
     /// Distinct types observed for one reused local-variable slot.
@@ -143,6 +149,14 @@ impl InferredType {
                     allocation_offset: right_offset,
                 },
             ) if left_name == right_name && left_offset == right_offset => self.clone(),
+            (
+                Self::UninitializedThis {
+                    class_name: left_name,
+                },
+                Self::UninitializedThis {
+                    class_name: right_name,
+                },
+            ) if left_name == right_name => self.clone(),
             _ => Self::Conflict,
         }
     }
