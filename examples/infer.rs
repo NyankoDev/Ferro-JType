@@ -46,6 +46,23 @@ fn main() -> ExitCode {
         for (slot, inferred_type) in method.local_types().iter().enumerate() {
             println!("    {slot}: {inferred_type:?}");
         }
+
+        for instruction in method.instructions() {
+            if instruction.operand_expectations().is_empty() {
+                continue;
+            }
+            println!(
+                "  operand expectations at {}:",
+                instruction.bytecode_offset()
+            );
+            for expectation in instruction.operand_expectations() {
+                println!(
+                    "    stack[{}]: {:?}",
+                    expectation.stack_index(),
+                    expectation.constraint()
+                );
+            }
+        }
     }
 
     if inference.diagnostics().is_empty() {

@@ -8,8 +8,8 @@ use crate::solver::transfer::transfer;
 use crate::types::join_local_types;
 use crate::{
     ClassName, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, InferenceConfig,
-    InferredType, InstructionInference, MethodInference, MethodSummaryResolver, ReferenceType,
-    ReturnType, TypeDescriptor,
+    InferredType, InstructionInference, MethodInference, MethodSummaryResolver, OperandConstraint,
+    OperandExpectation, ReferenceType, ReturnType, TypeDescriptor,
 };
 
 pub(super) fn analyze_method(
@@ -390,6 +390,7 @@ fn observe_final_frames(
                 InstructionInference::new(
                     instruction.offset,
                     dynamic_call_kind(instruction),
+                    operand_expectations(method, instruction, &before.stack),
                     before.locals,
                     before.stack,
                     frame.stack.clone(),
@@ -402,6 +403,103 @@ fn observe_final_frames(
         instructions: observations,
         return_origins,
     }
+}
+
+fn operand_expectations(
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    stack_before: &[InferredType],
+) -> Vec<OperandExpectation> {
+    match instruction.opcode {
+        0xb3 | 0xb5 => field_put_expectations(instruction, stack_before.len()),
+        0xb6..=0xb9 => invocation_expectations(instruction, stack_before.len()),
+        0xac..=0xb0 => return_expectations(method, stack_before.len()),
+        _ => Vec::new(),
+    }
+}
+
+fn field_put_expectations(
+    instruction: &InstructionIr,
+    stack_depth: usize,
+) -> Vec<OperandExpectation> {
+    let Some((owner, descriptor)) = resolved_member_reference(instruction) else {
+        return Vec::new();
+    };
+    let Ok(descriptor) = TypeDescriptor::parse(descriptor) else {
+        return Vec::new();
+    };
+
+    let mut constraints = Vec::with_capacity(2);
+    if instruction.opcode == 0xb5 {
+        constraints.push(OperandConstraint::ReceiverAssignableTo(owner.clone()));
+    }
+    constraints.push(OperandConstraint::Descriptor(descriptor));
+    stack_expectations(stack_depth, constraints)
+}
+
+fn invocation_expectations(
+    instruction: &InstructionIr,
+    stack_depth: usize,
+) -> Vec<OperandExpectation> {
+    let Some((owner, descriptor)) = resolved_member_reference(instruction) else {
+        return Vec::new();
+    };
+    let Ok(descriptor) = crate::MethodDescriptor::parse(descriptor) else {
+        return Vec::new();
+    };
+
+    let mut constraints =
+        Vec::with_capacity(descriptor.parameters().len() + usize::from(instruction.opcode != 0xb8));
+    if instruction.opcode != 0xb8 {
+        constraints.push(OperandConstraint::ReceiverAssignableTo(owner.clone()));
+    }
+    constraints.extend(
+        descriptor
+            .parameters()
+            .iter()
+            .cloned()
+            .map(OperandConstraint::Descriptor),
+    );
+    stack_expectations(stack_depth, constraints)
+}
+
+fn return_expectations(method: &MethodIr, stack_depth: usize) -> Vec<OperandExpectation> {
+    let ReturnType::Type(descriptor) = method.descriptor.return_type() else {
+        return Vec::new();
+    };
+    stack_expectations(
+        stack_depth,
+        vec![OperandConstraint::Descriptor(descriptor.clone())],
+    )
+}
+
+fn stack_expectations(
+    stack_depth: usize,
+    constraints: Vec<OperandConstraint>,
+) -> Vec<OperandExpectation> {
+    let Some(start_index) = stack_depth.checked_sub(constraints.len()) else {
+        return Vec::new();
+    };
+    constraints
+        .into_iter()
+        .enumerate()
+        .map(|(offset, constraint)| OperandExpectation::new(start_index + offset, constraint))
+        .collect()
+}
+
+fn resolved_member_reference(instruction: &InstructionIr) -> Option<(&ClassName, &str)> {
+    let member = match &instruction.operand {
+        InstructionOperandIr::Member(member) => member,
+        InstructionOperandIr::InvokeInterface { method, .. } => method,
+        _ => return None,
+    };
+    let crate::ir::MemberRefIr::Resolved {
+        owner, descriptor, ..
+    } = member
+    else {
+        return None;
+    };
+    Some((owner, descriptor))
 }
 
 struct FinalObservations {

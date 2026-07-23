@@ -1,6 +1,6 @@
 use crate::{
     ClassName, Diagnostic, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor,
-    ReturnType,
+    ReturnType, TypeDescriptor,
 };
 
 /// Type-inference results for one Java class file.
@@ -198,6 +198,7 @@ impl MethodInference {
 pub struct InstructionInference {
     bytecode_offset: u16,
     dynamic_call_kind: Option<DynamicCallKind>,
+    operand_expectations: Vec<OperandExpectation>,
     local_types: Vec<InferredType>,
     stack_before: Vec<InferredType>,
     stack_after: Vec<InferredType>,
@@ -207,6 +208,7 @@ impl InstructionInference {
     pub(crate) fn new(
         bytecode_offset: u16,
         dynamic_call_kind: Option<DynamicCallKind>,
+        operand_expectations: Vec<OperandExpectation>,
         local_types: Vec<InferredType>,
         stack_before: Vec<InferredType>,
         stack_after: Vec<InferredType>,
@@ -214,6 +216,7 @@ impl InstructionInference {
         Self {
             bytecode_offset,
             dynamic_call_kind,
+            operand_expectations,
             local_types,
             stack_before,
             stack_after,
@@ -230,6 +233,17 @@ impl InstructionInference {
     #[must_use]
     pub const fn dynamic_call_kind(&self) -> Option<DynamicCallKind> {
         self.dynamic_call_kind
+    }
+
+    /// Returns verifier-derived requirements for operands consumed by this instruction.
+    ///
+    /// Each expectation names an index into [`Self::stack_before`]. The index
+    /// uses that slice's bottom-to-top order. Expectations are reported only
+    /// when a resolved member reference and a complete operand stack are both
+    /// available; they do not alter the observed inferred types.
+    #[must_use]
+    pub fn operand_expectations(&self) -> &[OperandExpectation] {
+        &self.operand_expectations
     }
 
     /// Returns local-variable types immediately before this instruction.
@@ -249,4 +263,45 @@ impl InstructionInference {
     pub fn stack_after(&self) -> &[InferredType] {
         &self.stack_after
     }
+}
+
+/// A verifier-derived type requirement for one operand-stack value.
+///
+/// The index identifies a value in [`InstructionInference::stack_before`].
+/// It is not an assertion that the observed value has one exact allocation
+/// class: receiver requirements are assignability constraints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperandExpectation {
+    stack_index: usize,
+    constraint: OperandConstraint,
+}
+
+impl OperandExpectation {
+    pub(crate) const fn new(stack_index: usize, constraint: OperandConstraint) -> Self {
+        Self {
+            stack_index,
+            constraint,
+        }
+    }
+
+    /// Returns the zero-based index in [`InstructionInference::stack_before`].
+    #[must_use]
+    pub const fn stack_index(&self) -> usize {
+        self.stack_index
+    }
+
+    /// Returns the JVM requirement imposed on the value at [`Self::stack_index`].
+    #[must_use]
+    pub const fn constraint(&self) -> &OperandConstraint {
+        &self.constraint
+    }
+}
+
+/// The JVM type condition required for an instruction operand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperandConstraint {
+    /// The operand must have the category described by this JVM descriptor.
+    Descriptor(TypeDescriptor),
+    /// The operand is an instance receiver assignable to this member owner.
+    ReceiverAssignableTo(ClassName),
 }

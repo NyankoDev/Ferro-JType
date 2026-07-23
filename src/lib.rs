@@ -26,7 +26,9 @@ pub use api::{InferenceConfig, Inferer, infer_class};
 pub use diagnostic::{Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity};
 pub use error::{DescriptorError, Error, NameError};
 pub use hierarchy::{ClassHierarchy, TypeHierarchy};
-pub use result::{ClassInference, InstructionInference, MethodInference};
+pub use result::{
+    ClassInference, InstructionInference, MethodInference, OperandConstraint, OperandExpectation,
+};
 pub use summary::{FieldSummaries, FieldSummaryResolver, MethodSummaries, MethodSummaryResolver};
 pub use types::{
     ClassName, DynamicCallKind, GenericSignature, InferredType, MethodDescriptor,
