@@ -272,17 +272,36 @@ pub(crate) fn value_type_matches_descriptor(
                 | (crate::PrimitiveType::Long, InferredType::Long)
                 | (crate::PrimitiveType::Double, InferredType::Double)
         ),
-        TypeDescriptor::Reference(_) => matches!(
-            value_type,
-            InferredType::Reference(
+        TypeDescriptor::Reference(_) | TypeDescriptor::Array { .. } => {
+            reference_value_matches_descriptor(descriptor, value_type)
+        }
+    }
+}
+
+fn reference_value_matches_descriptor(
+    descriptor: &TypeDescriptor,
+    value_type: &InferredType,
+) -> bool {
+    match value_type {
+        InferredType::Reference(reference) => match descriptor {
+            TypeDescriptor::Reference(_) => matches!(
+                reference,
                 crate::ReferenceType::Exact(_)
                     | crate::ReferenceType::Array(_)
                     | crate::ReferenceType::Null
-            )
-        ),
-        TypeDescriptor::Array { .. } => matches!(
-            value_type,
-            InferredType::Reference(crate::ReferenceType::Array(_) | crate::ReferenceType::Null)
-        ),
+            ),
+            TypeDescriptor::Array { .. } => matches!(
+                reference,
+                crate::ReferenceType::Array(_) | crate::ReferenceType::Null
+            ),
+            TypeDescriptor::Primitive(_) => false,
+        },
+        InferredType::Alternatives(values) => {
+            !values.is_empty()
+                && values
+                    .iter()
+                    .all(|value| reference_value_matches_descriptor(descriptor, value))
+        }
+        _ => false,
     }
 }
