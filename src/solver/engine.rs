@@ -515,8 +515,15 @@ fn return_value_matches_opcode(opcode: u8, value: &InferredType) -> bool {
             | (0xad, InferredType::Long)
             | (0xae, InferredType::Float)
             | (0xaf, InferredType::Double)
-            | (0xb0, InferredType::Reference(_))
-    )
+    ) || (opcode == 0xb0 && reference_value(value))
+}
+
+fn reference_value(value: &InferredType) -> bool {
+    match value {
+        InferredType::Reference(_) => true,
+        InferredType::Alternatives(values) => values.iter().all(reference_value),
+        _ => false,
+    }
 }
 
 fn dynamic_call_kind(instruction: &InstructionIr) -> Option<crate::DynamicCallKind> {

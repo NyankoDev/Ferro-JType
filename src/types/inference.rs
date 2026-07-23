@@ -5,9 +5,8 @@ use crate::{ClassName, PrimitiveType, TypeDescriptor};
 
 /// Inferred state for a JVM reference value.
 ///
-/// Without an external class hierarchy, incompatible known references merge
-/// to `java/lang/Object`. [`Self::Unknown`] is reserved for values whose class
-/// bytes do not supply enough information to establish a reference type.
+/// [`Self::Unknown`] is reserved for values whose class bytes do not supply
+/// enough information to establish a reference type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReferenceType {
     /// A reference whose bytecode supplies this static class type.
@@ -31,16 +30,20 @@ impl ReferenceType {
         Self::Exact(class_name)
     }
 
-    fn join(&self, other: &Self, hierarchy: Option<&dyn TypeHierarchy>) -> Self {
+    fn join(&self, other: &Self, hierarchy: Option<&dyn TypeHierarchy>) -> Option<Self> {
         match (self, other) {
-            (Self::Null, reference) | (reference, Self::Null) => reference.clone(),
-            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
-            (Self::Exact(left), Self::Exact(right)) if left == right => Self::Exact(left.clone()),
-            (Self::Array(left), Self::Array(right)) if left == right => Self::Array(left.clone()),
-            (Self::Exact(left), Self::Exact(right)) => {
-                Self::Exact(common_supertype(hierarchy, left, right))
+            (Self::Null, reference) | (reference, Self::Null) => Some(reference.clone()),
+            (Self::Unknown, _) | (_, Self::Unknown) => Some(Self::Unknown),
+            (Self::Exact(left), Self::Exact(right)) if left == right => {
+                Some(Self::Exact(left.clone()))
             }
-            _ => Self::Exact(ClassName::java_lang_object()),
+            (Self::Array(left), Self::Array(right)) if left == right => {
+                Some(Self::Array(left.clone()))
+            }
+            (Self::Exact(left), Self::Exact(right)) => {
+                common_supertype(hierarchy, left, right).map(Self::Exact)
+            }
+            _ => None,
         }
     }
 }
@@ -78,10 +81,11 @@ pub enum InferredType {
     },
     /// A return address used by legacy `jsr` and `ret` bytecode.
     ReturnAddress,
-    /// Distinct types observed for one reused local-variable slot.
+    /// Distinct possible types observed for one value.
     ///
-    /// This is only used for local slots and method summaries. Operand-stack
-    /// conflicts continue to use [`Self::Conflict`].
+    /// Reference alternatives preserve known candidates at a control-flow merge
+    /// when no supplied hierarchy proves a common supertype. Alternatives may
+    /// also describe a reused local-variable slot.
     Alternatives(Vec<InferredType>),
     /// Incompatible values reached the same control-flow position.
     Conflict,
@@ -116,6 +120,62 @@ fn append_alternatives(destination: &mut Vec<InferredType>, value: &InferredType
         value if !destination.contains(value) => destination.push(value.clone()),
         _ => {}
     }
+}
+
+fn reference_alternatives(value: &InferredType) -> Option<Vec<ReferenceType>> {
+    match value {
+        InferredType::Reference(reference) => Some(vec![reference.clone()]),
+        InferredType::Alternatives(values) => values
+            .iter()
+            .map(|value| match value {
+                InferredType::Reference(reference) => Some(reference.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+fn join_reference_alternatives(
+    left: &[ReferenceType],
+    right: &[ReferenceType],
+    hierarchy: Option<&dyn TypeHierarchy>,
+) -> InferredType {
+    let mut references = left.iter().chain(right).cloned().collect::<Vec<_>>();
+
+    if references.contains(&ReferenceType::Unknown) {
+        return InferredType::Reference(ReferenceType::Unknown);
+    }
+
+    if references.len() > 1 {
+        references.retain(|reference| *reference != ReferenceType::Null);
+    }
+    references.sort_by(compare_references);
+    references.dedup();
+
+    let Some(first) = references.first().cloned() else {
+        return InferredType::Reference(ReferenceType::Null);
+    };
+    if references.len() == 1 {
+        return InferredType::Reference(first);
+    }
+
+    let common = references
+        .iter()
+        .skip(1)
+        .try_fold(first.clone(), |common, reference| {
+            common.join(reference, hierarchy)
+        });
+    if let Some(common) = common {
+        return InferredType::Reference(common);
+    }
+
+    InferredType::Alternatives(
+        references
+            .into_iter()
+            .map(InferredType::Reference)
+            .collect(),
+    )
 }
 
 fn compare_inferred_types(left: &InferredType, right: &InferredType) -> Ordering {
@@ -232,8 +292,9 @@ impl InferredType {
     /// Conservatively joins two types at a control-flow merge point.
     ///
     /// Compatible values preserve their type. Incompatible primitive or
-    /// uninitialized values become [`Self::Conflict`], while incompatible
-    /// references become [`ReferenceType::Unknown`].
+    /// uninitialized values become [`Self::Conflict`]. Incompatible known
+    /// references become [`Self::Alternatives`] unless a supplied hierarchy
+    /// proves their common supertype.
     #[must_use]
     pub fn join(&self, other: &Self) -> Self {
         self.join_with_hierarchy(other, None)
@@ -244,6 +305,12 @@ impl InferredType {
         other: &Self,
         hierarchy: Option<&dyn TypeHierarchy>,
     ) -> Self {
+        if let (Some(left), Some(right)) =
+            (reference_alternatives(self), reference_alternatives(other))
+        {
+            return join_reference_alternatives(&left, &right, hierarchy);
+        }
+
         match (self, other) {
             (Self::Bottom, value) | (value, Self::Bottom) => value.clone(),
             (Self::Int, Self::Int)
@@ -252,9 +319,6 @@ impl InferredType {
             | (Self::Double, Self::Double)
             | (Self::ReturnAddress, Self::ReturnAddress)
             | (Self::Conflict, Self::Conflict) => self.clone(),
-            (Self::Reference(left), Self::Reference(right)) => {
-                Self::Reference(left.join(right, hierarchy))
-            }
             (
                 Self::Uninitialized {
                     class_name: left_name,

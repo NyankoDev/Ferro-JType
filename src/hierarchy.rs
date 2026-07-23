@@ -12,8 +12,8 @@ use crate::{ClassName, DescriptorError, Error};
 pub trait TypeHierarchy: Send + Sync {
     /// Returns the direct superclass and interfaces of `class_name`.
     ///
-    /// Return `None` when the class is unavailable. The inferer then falls
-    /// back to `java/lang/Object` rather than making an unsupported claim.
+    /// Return `None` when the class is unavailable. The inferer then preserves
+    /// distinct reference candidates rather than inventing a common supertype.
     fn direct_supertypes(&self, class_name: &ClassName) -> Option<Vec<ClassName>>;
 }
 
@@ -91,14 +91,12 @@ pub(crate) fn common_supertype(
     hierarchy: Option<&dyn TypeHierarchy>,
     left: &ClassName,
     right: &ClassName,
-) -> ClassName {
+) -> Option<ClassName> {
     if left == right {
-        return left.clone();
+        return Some(left.clone());
     }
 
-    let Some(hierarchy) = hierarchy else {
-        return ClassName::java_lang_object();
-    };
+    let hierarchy = hierarchy?;
     let left_distances = ancestor_distances(hierarchy, left);
     let right_distances = ancestor_distances(hierarchy, right);
     left_distances
@@ -115,7 +113,6 @@ pub(crate) fn common_supertype(
             (*furthest_distance, *total_distance, (*candidate).clone())
         })
         .map(|(candidate, _, _)| candidate.clone())
-        .unwrap_or_else(ClassName::java_lang_object)
 }
 
 fn ancestor_distances(
@@ -128,13 +125,11 @@ fn ancestor_distances(
 
     while let Some(current) = queue.pop_front() {
         let distance = distances[&current];
-        let parents = hierarchy.direct_supertypes(&current).unwrap_or_else(|| {
-            if current == object {
-                Vec::new()
-            } else {
-                vec![object.clone()]
-            }
-        });
+        let parents = if current == object {
+            Vec::new()
+        } else {
+            hierarchy.direct_supertypes(&current).unwrap_or_default()
+        };
         for parent in parents {
             if distances.insert(parent.clone(), distance + 1).is_none() {
                 queue.push_back(parent);
@@ -142,6 +137,5 @@ fn ancestor_distances(
         }
     }
 
-    distances.entry(object).or_insert(usize::MAX / 4);
     distances
 }
