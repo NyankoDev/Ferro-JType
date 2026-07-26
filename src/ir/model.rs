@@ -1,3 +1,4 @@
+use crate::ir::LocalVariableIntegralHint;
 use crate::{
     ClassName, Diagnostic, DynamicCallKind, GenericSignature, MethodDescriptor, TypeDescriptor,
 };
@@ -20,6 +21,7 @@ pub(crate) struct MethodIr {
     pub(crate) access_flags: u16,
     pub(crate) max_stack: u16,
     pub(crate) max_locals: u16,
+    pub(crate) local_variable_hints: Vec<LocalVariableIntegralHint>,
     pub(crate) instructions: Vec<InstructionIr>,
     pub(crate) exception_handlers: Vec<ExceptionHandlerIr>,
 }

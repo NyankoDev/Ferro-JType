@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
+use crate::ir::LocalVariableIntegralHint;
 use crate::{
     ClassName, InferredType, IntegralTypeSet, MethodDescriptor, ReferenceType, TypeDescriptor,
     types::join_local_types,
@@ -14,6 +15,7 @@ pub(crate) struct Frame {
     stack_return_targets: Vec<Option<BTreeSet<u16>>>,
     stack_local_origins: Vec<Option<ValueOrigin>>,
     stack_instanceof_facts: Vec<Option<InstanceOfFact>>,
+    local_variable_hints: Arc<[LocalVariableIntegralHint]>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,7 @@ impl Frame {
         descriptor: &MethodDescriptor,
         access_flags: u16,
         max_locals: u16,
+        local_variable_hints: Arc<[LocalVariableIntegralHint]>,
     ) -> Self {
         let mut locals = vec![InferredType::Bottom; usize::from(max_locals)];
         let mut slot = 0_usize;
@@ -99,6 +102,7 @@ impl Frame {
             stack_return_targets: Vec::new(),
             stack_local_origins: Vec::new(),
             stack_instanceof_facts: Vec::new(),
+            local_variable_hints,
         }
     }
 
@@ -207,14 +211,29 @@ impl Frame {
         self.local_return_targets.get(usize::from(local))?.as_ref()
     }
 
-    pub(crate) fn push_local(&mut self, local: u16) {
+    pub(crate) fn push_local(&mut self, local: u16, offset: u16) {
         let mut value = self.get_local_value(local);
+        value.value = self.refine_integral_local(local, offset, value.value);
         value.local_origin = self
             .local_value_origins
             .get(usize::from(local))
             .copied()
             .flatten();
         self.push_value(value);
+    }
+
+    pub(crate) fn local_types_at(&self, offset: u16) -> Vec<InferredType> {
+        self.locals
+            .iter()
+            .enumerate()
+            .map(|(local, value)| {
+                self.refine_integral_local(
+                    u16::try_from(local).unwrap_or(u16::MAX),
+                    offset,
+                    value.clone(),
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn push_instanceof_result(&mut self, fact: Option<InstanceOfFact>) {
@@ -283,6 +302,7 @@ impl Frame {
             stack_return_targets: vec![None],
             stack_local_origins: vec![None],
             stack_instanceof_facts: vec![None],
+            local_variable_hints: Arc::clone(&self.local_variable_hints),
         }
     }
 
@@ -360,6 +380,23 @@ impl Frame {
         MergeOutcome {
             stack_height_mismatch,
         }
+    }
+
+    fn refine_integral_local(&self, local: u16, offset: u16, value: InferredType) -> InferredType {
+        if value.integral_types().is_none() {
+            return value;
+        }
+
+        let mut hints = self.local_variable_hints.iter().filter(|hint| {
+            hint.local == local && hint.start_offset <= offset && offset < hint.end_offset
+        });
+        let Some(first) = hints.next() else {
+            return value;
+        };
+        if hints.any(|hint| hint.types != first.types) {
+            return value;
+        }
+        InferredType::from_integral_types(first.types)
     }
 }
 

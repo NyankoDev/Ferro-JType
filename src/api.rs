@@ -18,6 +18,7 @@ pub struct InferenceConfig {
     max_block_iterations: usize,
     max_work_items: usize,
     unbounded_analysis: bool,
+    use_local_variable_metadata: bool,
     hierarchy: Option<Arc<dyn TypeHierarchy>>,
     method_summaries: Option<Arc<dyn MethodSummaryResolver>>,
     field_summaries: Option<Arc<dyn FieldSummaryResolver>>,
@@ -31,6 +32,10 @@ impl std::fmt::Debug for InferenceConfig {
             .field("max_block_iterations", &self.max_block_iterations)
             .field("max_work_items", &self.max_work_items)
             .field("unbounded_analysis", &self.unbounded_analysis)
+            .field(
+                "use_local_variable_metadata",
+                &self.use_local_variable_metadata,
+            )
             .field("has_type_hierarchy", &self.hierarchy.is_some())
             .field("has_method_summaries", &self.method_summaries.is_some())
             .field("has_field_summaries", &self.field_summaries.is_some())
@@ -44,6 +49,7 @@ impl PartialEq for InferenceConfig {
             && self.max_block_iterations == other.max_block_iterations
             && self.max_work_items == other.max_work_items
             && self.unbounded_analysis == other.unbounded_analysis
+            && self.use_local_variable_metadata == other.use_local_variable_metadata
             && match (&self.hierarchy, &other.hierarchy) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 (None, None) => true,
@@ -71,6 +77,7 @@ impl Default for InferenceConfig {
             max_block_iterations: 128,
             max_work_items: 50_000,
             unbounded_analysis: true,
+            use_local_variable_metadata: false,
             hierarchy: None,
             method_summaries: None,
             field_summaries: None,
@@ -106,6 +113,15 @@ impl InferenceConfig {
     #[must_use]
     pub const fn unbounded_analysis(&self) -> bool {
         self.unbounded_analysis
+    }
+
+    /// Returns whether validated `LocalVariableTable` hints refine integral values.
+    ///
+    /// The default is `false` because debug attributes are optional and can be
+    /// forged without affecting JVM verification.
+    #[must_use]
+    pub const fn uses_local_variable_metadata(&self) -> bool {
+        self.use_local_variable_metadata
     }
 
     /// Returns whether optional class-hierarchy refinement is enabled.
@@ -163,6 +179,18 @@ impl InferenceConfig {
     #[must_use]
     pub const fn with_unbounded_analysis(mut self) -> Self {
         self.unbounded_analysis = true;
+        self
+    }
+
+    /// Chooses whether to use `LocalVariableTable` as additional local-type evidence.
+    ///
+    /// Enabled metadata is checked for valid bytecode ranges, local slots,
+    /// descriptors, and JVM verification categories. It is not a trusted
+    /// source of truth: an obfuscator can forge it while keeping the class
+    /// verifier-valid. The default ignores this attribute.
+    #[must_use]
+    pub const fn with_local_variable_metadata(mut self, use_local_variable_metadata: bool) -> Self {
+        self.use_local_variable_metadata = use_local_variable_metadata;
         self
     }
 

@@ -183,7 +183,7 @@ pub(crate) fn transfer(
 
 fn load_local(instruction: &InstructionIr, frame: &mut Frame, wide_opcode: u8, short_base: u8) {
     let local = local_index(instruction, wide_opcode, short_base).unwrap_or_default();
-    frame.push_local(local);
+    frame.push_local(local, instruction.offset);
 }
 
 fn store_local(

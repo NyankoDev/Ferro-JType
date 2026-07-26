@@ -9,7 +9,7 @@ use rust_asm::constant_pool::CpInfo;
 
 use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
-    MethodIr, strip_stack_map_tables,
+    MethodIr, local_variable_integral_hints, strip_stack_map_tables,
 };
 use crate::{
     ClassName, DescriptorError, Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity,
@@ -53,7 +53,18 @@ fn lower_class(class: &Class, generic_metadata: &GenericMetadata) -> Result<Clas
                 .method_signatures
                 .get(&(method.name().to_owned(), method.descriptor().to_owned()))
                 .cloned();
-            lower_method(class, method, generic_signature, generic_metadata)
+            let local_variable_hints = generic_metadata
+                .local_variable_hints
+                .get(&(method.name().to_owned(), method.descriptor().to_owned()))
+                .cloned()
+                .unwrap_or_default();
+            lower_method(
+                class,
+                method,
+                generic_signature,
+                local_variable_hints,
+                generic_metadata,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -70,6 +81,7 @@ fn lower_method(
     class: &Class,
     method: ferro_babe::model::Method<'_>,
     generic_signature: Option<GenericSignature>,
+    local_variable_hints: Vec<crate::ir::LocalVariableIntegralHint>,
     metadata: &GenericMetadata,
 ) -> Result<MethodIr, Error> {
     let descriptor = MethodDescriptor::parse(method.descriptor())?;
@@ -101,6 +113,7 @@ fn lower_method(
         access_flags: method.access_flags(),
         max_stack: method.max_stack(),
         max_locals: method.max_locals(),
+        local_variable_hints,
         instructions,
         exception_handlers,
     })
@@ -111,11 +124,16 @@ struct GenericMetadata {
     class_signature: Option<GenericSignature>,
     method_signatures: BTreeMap<(String, String), GenericSignature>,
     dynamic_call_kinds: BTreeMap<u16, DynamicCallKind>,
+    local_variable_hints: BTreeMap<(String, String), Vec<crate::ir::LocalVariableIntegralHint>>,
 }
 
 fn extract_generic_metadata(bytes: &[u8]) -> GenericMetadata {
+    let local_variable_hints = local_variable_integral_hints(bytes);
     let Ok(class_file) = read_class_file(bytes) else {
-        return GenericMetadata::default();
+        return GenericMetadata {
+            local_variable_hints,
+            ..GenericMetadata::default()
+        };
     };
     let class_signature = signature_from_attributes(&class_file, &class_file.attributes);
     let method_signatures = class_file
@@ -133,6 +151,7 @@ fn extract_generic_metadata(bytes: &[u8]) -> GenericMetadata {
         class_signature,
         method_signatures,
         dynamic_call_kinds,
+        local_variable_hints,
     }
 }
 

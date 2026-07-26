@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    sync::Arc,
+};
 
 use crate::cfg::{EdgeKind, build_cfg};
 use crate::ir::{InstructionIr, InstructionOperandIr, MethodIr};
@@ -29,6 +32,11 @@ pub(super) fn analyze_method(
         &method.descriptor,
         method.access_flags,
         method.max_locals,
+        if config.uses_local_variable_metadata() {
+            Arc::from(method.local_variable_hints.clone())
+        } else {
+            Arc::default()
+        },
     );
     let parameter_types = method
         .descriptor
@@ -392,7 +400,7 @@ fn observe_final_frames(
                     instruction.offset,
                     dynamic_call_kind(instruction),
                     operand_expectations(method, instruction, &before.stack),
-                    before.locals,
+                    before.local_types_at(instruction.offset),
                     before.stack,
                     frame.stack.clone(),
                 ),
