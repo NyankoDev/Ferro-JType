@@ -7,11 +7,11 @@ use crate::{
     TypeHierarchy,
 };
 
-/// Configuration for a bounded class-file type-inference run.
+/// Configuration for a class-file type-inference run.
 ///
-/// The default permits diagnostics and bounds the work performed for every
-/// analyzed method. Use the builder-style methods to tighten or relax these
-/// limits for a particular input corpus.
+/// The default permits diagnostics and runs every analyzed method to a fixed
+/// point without an iteration budget. Use the builder-style methods to opt
+/// into limits for an untrusted input corpus.
 #[derive(Clone)]
 pub struct InferenceConfig {
     strict: bool,
@@ -70,7 +70,7 @@ impl Default for InferenceConfig {
             strict: false,
             max_block_iterations: 128,
             max_work_items: 50_000,
-            unbounded_analysis: false,
+            unbounded_analysis: true,
             hierarchy: None,
             method_summaries: None,
             field_summaries: None,
@@ -85,13 +85,15 @@ impl InferenceConfig {
         self.strict
     }
 
-    /// Returns the maximum number of times a basic block may be processed.
+    /// Returns the maximum number of times a basic block may be processed
+    /// when bounded analysis is enabled.
     #[must_use]
     pub const fn max_block_iterations(&self) -> usize {
         self.max_block_iterations
     }
 
-    /// Returns the maximum number of work-queue entries processed per method.
+    /// Returns the maximum number of work-queue entries processed per method
+    /// when bounded analysis is enabled.
     ///
     /// The same budget also bounds automatic class-local method-summary
     /// revisits after every method has received its initial analysis pass.
@@ -100,7 +102,7 @@ impl InferenceConfig {
         self.max_work_items
     }
 
-    /// Returns whether analysis ignores configured work limits.
+    /// Returns whether analysis runs without configured work limits.
     #[must_use]
     pub const fn unbounded_analysis(&self) -> bool {
         self.unbounded_analysis
@@ -131,30 +133,33 @@ impl InferenceConfig {
         self
     }
 
-    /// Sets the per-basic-block processing limit.
+    /// Sets the per-basic-block processing limit and enables bounded analysis.
     ///
     /// A value of zero is rejected by [`Inferer::new`].
     #[must_use]
     pub const fn with_max_block_iterations(mut self, max_block_iterations: usize) -> Self {
         self.max_block_iterations = max_block_iterations;
+        self.unbounded_analysis = false;
         self
     }
 
-    /// Sets the per-method work-queue processing limit.
+    /// Sets the per-method work-queue processing limit and enables bounded analysis.
     ///
     /// The same value bounds automatic class-local method-summary revisits. A
     /// value of zero is rejected by [`Inferer::new`].
     #[must_use]
     pub const fn with_max_work_items(mut self, max_work_items: usize) -> Self {
         self.max_work_items = max_work_items;
+        self.unbounded_analysis = false;
         self
     }
 
-    /// Disables work-item and per-block limits for trusted, difficult inputs.
+    /// Disables work-item and per-block limits.
     ///
-    /// This is useful for deeply flattened control flow when completion is more
-    /// important than a fixed resource budget, including class-local method
-    /// summary convergence. It never executes Java code.
+    /// This is the default behavior and is useful for deeply flattened control
+    /// flow when completion is more important than a fixed resource budget,
+    /// including class-local method-summary convergence. It never executes Java
+    /// code.
     #[must_use]
     pub const fn with_unbounded_analysis(mut self) -> Self {
         self.unbounded_analysis = true;
