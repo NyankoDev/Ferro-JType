@@ -2,6 +2,7 @@ use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MethodIr};
 use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
 use crate::summary::{FieldSummaryResolver, MethodSummaryResolver};
 use crate::{ClassName, Diagnostic, InferredType, IntegralTypeSet, ReferenceType, TypeDescriptor};
+use rust_asm::opcodes as op;
 
 mod array;
 mod member;
@@ -20,134 +21,205 @@ pub(crate) fn transfer(
     field_summaries: Option<&dyn FieldSummaryResolver>,
 ) {
     match instruction.opcode {
-        0x00 => {}
-        0x01 => frame.push(InferredType::Reference(ReferenceType::Null)),
-        0x02..=0x08 | 0x10 | 0x11 => frame.push(InferredType::Integral(IntegralTypeSet::ALL)),
-        0x09..=0x0a => frame.push(InferredType::Long),
-        0x0b..=0x0d => frame.push(InferredType::Float),
-        0x0e..=0x0f => frame.push(InferredType::Double),
-        0x12..=0x14 => push_constant(instruction, frame),
-        0x15 | 0x1a..=0x1d => load_local(instruction, frame, 0x15, 0x1a),
-        0x16 | 0x1e..=0x21 => load_local(instruction, frame, 0x16, 0x1e),
-        0x17 | 0x22..=0x25 => load_local(instruction, frame, 0x17, 0x22),
-        0x18 | 0x26..=0x29 => load_local(instruction, frame, 0x18, 0x26),
-        0x19 | 0x2a..=0x2d => load_local(instruction, frame, 0x19, 0x2a),
-        0x2e => integral_array_load(
+        op::NOP => {}
+        op::ACONST_NULL => frame.push(InferredType::Reference(ReferenceType::Null)),
+        op::ICONST_M1..=op::ICONST_5 | op::BIPUSH | op::SIPUSH => {
+            frame.push(InferredType::Integral(IntegralTypeSet::ALL))
+        }
+        op::LCONST_0..=op::LCONST_1 => frame.push(InferredType::Long),
+        op::FCONST_0..=op::FCONST_2 => frame.push(InferredType::Float),
+        op::DCONST_0..=op::DCONST_1 => frame.push(InferredType::Double),
+        op::LDC..=op::LDC2_W => push_constant(instruction, frame),
+        op::ILOAD | op::ILOAD_0..=op::ILOAD_3 => {
+            load_local(instruction, frame, op::ILOAD, op::ILOAD_0)
+        }
+        op::LLOAD | op::LLOAD_0..=op::LLOAD_3 => {
+            load_local(instruction, frame, op::LLOAD, op::LLOAD_0)
+        }
+        op::FLOAD | op::FLOAD_0..=op::FLOAD_3 => {
+            load_local(instruction, frame, op::FLOAD, op::FLOAD_0)
+        }
+        op::DLOAD | op::DLOAD_0..=op::DLOAD_3 => {
+            load_local(instruction, frame, op::DLOAD, op::DLOAD_0)
+        }
+        op::ALOAD | op::ALOAD_0..=op::ALOAD_3 => {
+            load_local(instruction, frame, op::ALOAD, op::ALOAD_0)
+        }
+        op::IALOAD => integral_array_load(
             frame,
             IntegralTypeSet::INT,
             method,
             instruction,
             diagnostics,
         ),
-        0x33 => integral_array_load(
+        op::BALOAD => integral_array_load(
             frame,
             IntegralTypeSet::BOOLEAN.union(IntegralTypeSet::BYTE),
             method,
             instruction,
             diagnostics,
         ),
-        0x34 => integral_array_load(
+        op::CALOAD => integral_array_load(
             frame,
             IntegralTypeSet::CHAR,
             method,
             instruction,
             diagnostics,
         ),
-        0x35 => integral_array_load(
+        op::SALOAD => integral_array_load(
             frame,
             IntegralTypeSet::SHORT,
             method,
             instruction,
             diagnostics,
         ),
-        0x2f => array_load(frame, InferredType::Long, method, instruction, diagnostics),
-        0x30 => array_load(frame, InferredType::Float, method, instruction, diagnostics),
-        0x31 => array_load(
+        op::LALOAD => array_load(frame, InferredType::Long, method, instruction, diagnostics),
+        op::FALOAD => array_load(frame, InferredType::Float, method, instruction, diagnostics),
+        op::DALOAD => array_load(
             frame,
             InferredType::Double,
             method,
             instruction,
             diagnostics,
         ),
-        0x32 => reference_array_load(frame, method, instruction, diagnostics),
-        0x36 | 0x3b..=0x3e => store_local(instruction, frame, 0x36, 0x3b, method, diagnostics),
-        0x37 | 0x3f..=0x42 => store_local(instruction, frame, 0x37, 0x3f, method, diagnostics),
-        0x38 | 0x43..=0x46 => store_local(instruction, frame, 0x38, 0x43, method, diagnostics),
-        0x39 | 0x47..=0x4a => store_local(instruction, frame, 0x39, 0x47, method, diagnostics),
-        0x3a | 0x4b..=0x4e => store_local(instruction, frame, 0x3a, 0x4b, method, diagnostics),
-        0x4f..=0x56 => array_store(frame, method, instruction, diagnostics),
-        0x57 => discard(frame, method, instruction, diagnostics),
-        0x58 => discard_two_slots(frame, method, instruction, diagnostics),
-        0x59 => duplicate_top(frame, method, instruction, diagnostics),
-        0x5a => duplicate_x1(frame, method, instruction, diagnostics),
-        0x5b => duplicate_x2(frame, method, instruction, diagnostics),
-        0x5c => duplicate_two(frame, method, instruction, diagnostics),
-        0x5d => duplicate_two_x1(frame, method, instruction, diagnostics),
-        0x5e => duplicate_two_x2(frame, method, instruction, diagnostics),
-        0x5f => swap(frame, method, instruction, diagnostics),
-        0x60 | 0x64 | 0x68 | 0x6c | 0x70 | 0x78 | 0x7a | 0x7c | 0x7e | 0x80 | 0x82 => {
-            binary(frame, InferredType::Int, method, instruction, diagnostics)
-        }
-        0x61 | 0x65 | 0x69 | 0x6d | 0x71 | 0x79 | 0x7b | 0x7d | 0x7f | 0x81 | 0x83 => {
-            binary(frame, InferredType::Long, method, instruction, diagnostics)
-        }
-        0x62 | 0x66 | 0x6a | 0x6e | 0x72 => {
+        op::AALOAD => reference_array_load(frame, method, instruction, diagnostics),
+        op::ISTORE | op::ISTORE_0..=op::ISTORE_3 => store_local(
+            instruction,
+            frame,
+            op::ISTORE,
+            op::ISTORE_0,
+            method,
+            diagnostics,
+        ),
+        op::LSTORE | op::LSTORE_0..=op::LSTORE_3 => store_local(
+            instruction,
+            frame,
+            op::LSTORE,
+            op::LSTORE_0,
+            method,
+            diagnostics,
+        ),
+        op::FSTORE | op::FSTORE_0..=op::FSTORE_3 => store_local(
+            instruction,
+            frame,
+            op::FSTORE,
+            op::FSTORE_0,
+            method,
+            diagnostics,
+        ),
+        op::DSTORE | op::DSTORE_0..=op::DSTORE_3 => store_local(
+            instruction,
+            frame,
+            op::DSTORE,
+            op::DSTORE_0,
+            method,
+            diagnostics,
+        ),
+        op::ASTORE | op::ASTORE_0..=op::ASTORE_3 => store_local(
+            instruction,
+            frame,
+            op::ASTORE,
+            op::ASTORE_0,
+            method,
+            diagnostics,
+        ),
+        op::IASTORE..=op::SASTORE => array_store(frame, method, instruction, diagnostics),
+        op::POP => discard(frame, method, instruction, diagnostics),
+        op::POP2 => discard_two_slots(frame, method, instruction, diagnostics),
+        op::DUP => duplicate_top(frame, method, instruction, diagnostics),
+        op::DUP_X1 => duplicate_x1(frame, method, instruction, diagnostics),
+        op::DUP_X2 => duplicate_x2(frame, method, instruction, diagnostics),
+        op::DUP2 => duplicate_two(frame, method, instruction, diagnostics),
+        op::DUP2_X1 => duplicate_two_x1(frame, method, instruction, diagnostics),
+        op::DUP2_X2 => duplicate_two_x2(frame, method, instruction, diagnostics),
+        op::SWAP => swap(frame, method, instruction, diagnostics),
+        op::IADD
+        | op::ISUB
+        | op::IMUL
+        | op::IDIV
+        | op::IREM
+        | op::ISHL
+        | op::ISHR
+        | op::IUSHR
+        | op::IAND
+        | op::IOR
+        | op::IXOR => binary(frame, InferredType::Int, method, instruction, diagnostics),
+        op::LADD
+        | op::LSUB
+        | op::LMUL
+        | op::LDIV
+        | op::LREM
+        | op::LSHL
+        | op::LSHR
+        | op::LUSHR
+        | op::LAND
+        | op::LOR
+        | op::LXOR => binary(frame, InferredType::Long, method, instruction, diagnostics),
+        op::FADD | op::FSUB | op::FMUL | op::FDIV | op::FREM => {
             binary(frame, InferredType::Float, method, instruction, diagnostics)
         }
-        0x63 | 0x67 | 0x6b | 0x6f | 0x73 => binary(
+        op::DADD | op::DSUB | op::DMUL | op::DDIV | op::DREM => binary(
             frame,
             InferredType::Double,
             method,
             instruction,
             diagnostics,
         ),
-        0x74 | 0x76 | 0x77 => unary(frame, method, instruction, diagnostics),
-        0x75 => unary(frame, method, instruction, diagnostics),
-        0x84 => increment_local(instruction, frame),
-        0x85 => convert(frame, InferredType::Long, method, instruction, diagnostics),
-        0x86 => convert(frame, InferredType::Float, method, instruction, diagnostics),
-        0x87 => convert(
+        op::INEG | op::FNEG | op::DNEG => unary(frame, method, instruction, diagnostics),
+        op::LNEG => unary(frame, method, instruction, diagnostics),
+        op::IINC => increment_local(instruction, frame),
+        op::I2L => convert(frame, InferredType::Long, method, instruction, diagnostics),
+        op::I2F => convert(frame, InferredType::Float, method, instruction, diagnostics),
+        op::I2D => convert(
             frame,
             InferredType::Double,
             method,
             instruction,
             diagnostics,
         ),
-        0x88 | 0x8b | 0x8e => convert(frame, InferredType::Int, method, instruction, diagnostics),
-        0x91 => convert(
+        op::L2I | op::F2I | op::D2I => {
+            convert(frame, InferredType::Int, method, instruction, diagnostics)
+        }
+        op::I2B => convert(
             frame,
             InferredType::Integral(IntegralTypeSet::BYTE),
             method,
             instruction,
             diagnostics,
         ),
-        0x92 => convert(
+        op::I2C => convert(
             frame,
             InferredType::Integral(IntegralTypeSet::CHAR),
             method,
             instruction,
             diagnostics,
         ),
-        0x93 => convert(
+        op::I2S => convert(
             frame,
             InferredType::Integral(IntegralTypeSet::SHORT),
             method,
             instruction,
             diagnostics,
         ),
-        0x89 | 0x8c | 0x8f => convert(frame, InferredType::Long, method, instruction, diagnostics),
-        0x8a | 0x8d | 0x90 => convert(frame, InferredType::Float, method, instruction, diagnostics),
-        0x94..=0x98 => binary(frame, InferredType::Int, method, instruction, diagnostics),
-        0x99..=0x9e | 0xc6 | 0xc7 => discard(frame, method, instruction, diagnostics),
-        0x9f..=0xa6 => {
+        op::L2F | op::F2L | op::D2L => {
+            convert(frame, InferredType::Long, method, instruction, diagnostics)
+        }
+        op::L2D | op::F2D | op::D2F => {
+            convert(frame, InferredType::Float, method, instruction, diagnostics)
+        }
+        op::LCMP..=op::DCMPG => binary(frame, InferredType::Int, method, instruction, diagnostics),
+        op::IFEQ..=op::IFLE | op::IFNULL | op::IFNONNULL => {
+            discard(frame, method, instruction, diagnostics)
+        }
+        op::IF_ICMPEQ..=op::IF_ACMPNE => {
             discard(frame, method, instruction, diagnostics);
             discard(frame, method, instruction, diagnostics);
         }
-        0xa8 | 0xc9 => push_subroutine_return_address(method, instruction, frame),
-        0xaa | 0xab => discard(frame, method, instruction, diagnostics),
-        0xac..=0xb0 => discard(frame, method, instruction, diagnostics),
-        0xb1 | 0xa7 | 0xa9 | 0xc8 => {}
-        0xb2 => field_get(
+        op::JSR | op::JSR_W => push_subroutine_return_address(method, instruction, frame),
+        op::TABLESWITCH | op::LOOKUPSWITCH => discard(frame, method, instruction, diagnostics),
+        op::IRETURN..=op::ARETURN => discard(frame, method, instruction, diagnostics),
+        op::RETURN | op::GOTO | op::RET | op::GOTO_W => {}
+        op::GETSTATIC => field_get(
             instruction,
             frame,
             method,
@@ -155,8 +227,8 @@ pub(crate) fn transfer(
             false,
             field_summaries,
         ),
-        0xb3 => field_put(instruction, frame, method, diagnostics, false),
-        0xb4 => field_get(
+        op::PUTSTATIC => field_put(instruction, frame, method, diagnostics, false),
+        op::GETFIELD => field_get(
             instruction,
             frame,
             method,
@@ -164,22 +236,24 @@ pub(crate) fn transfer(
             true,
             field_summaries,
         ),
-        0xb5 => field_put(instruction, frame, method, diagnostics, true),
-        0xb6..=0xb9 => invoke_member(instruction, frame, method, diagnostics, method_summaries),
-        0xba => invoke_dynamic(instruction, frame, method, diagnostics),
-        0xbb => allocate_object(instruction, frame),
-        0xbc => allocate_primitive_array(instruction, frame, method, diagnostics),
-        0xbd => allocate_reference_array(instruction, frame, method, diagnostics),
-        0xbe => {
+        op::PUTFIELD => field_put(instruction, frame, method, diagnostics, true),
+        op::INVOKEVIRTUAL..=op::INVOKEINTERFACE => {
+            invoke_member(instruction, frame, method, diagnostics, method_summaries)
+        }
+        op::INVOKEDYNAMIC => invoke_dynamic(instruction, frame, method, diagnostics),
+        op::NEW => allocate_object(instruction, frame),
+        op::NEWARRAY => allocate_primitive_array(instruction, frame, method, diagnostics),
+        op::ANEWARRAY => allocate_reference_array(instruction, frame, method, diagnostics),
+        op::ARRAYLENGTH => {
             discard(frame, method, instruction, diagnostics);
             frame.push(InferredType::Int);
         }
-        0xbf => discard(frame, method, instruction, diagnostics),
-        0xc0 => cast_reference(instruction, frame, method, diagnostics),
-        0xc1 => instance_of(instruction, frame, method, diagnostics),
-        0xc2 | 0xc3 => discard(frame, method, instruction, diagnostics),
-        0xc5 => allocate_multi_array(instruction, frame, method, diagnostics),
-        0xca | 0xfe | 0xff => unsupported(method, instruction, diagnostics),
+        op::ATHROW => discard(frame, method, instruction, diagnostics),
+        op::CHECKCAST => cast_reference(instruction, frame, method, diagnostics),
+        op::INSTANCEOF => instance_of(instruction, frame, method, diagnostics),
+        op::MONITORENTER | op::MONITOREXIT => discard(frame, method, instruction, diagnostics),
+        op::MULTIANEWARRAY => allocate_multi_array(instruction, frame, method, diagnostics),
+        op::BREAKPOINT | op::IMPDEP1 | op::IMPDEP2 => unsupported(method, instruction, diagnostics),
         _ => unsupported(method, instruction, diagnostics),
     }
 }

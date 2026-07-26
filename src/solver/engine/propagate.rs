@@ -7,20 +7,21 @@ use crate::{
     Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, InferredType,
     ReferenceType, TypeHierarchy,
 };
+use rust_asm::opcodes as op;
 
 pub(super) const fn instruction_may_throw(opcode: u8) -> bool {
     matches!(
         opcode,
-        0x12..=0x14
-            | 0x2e..=0x35
-            | 0x4f..=0x56
-            | 0x6c
-            | 0x6d
-            | 0x70
-            | 0x71
-            | 0xb2..=0xba
-            | 0xbb..=0xc3
-            | 0xc5
+        op::LDC..=op::LDC2_W
+            | op::IALOAD..=op::SALOAD
+            | op::IASTORE..=op::SASTORE
+            | op::IDIV
+            | op::LDIV
+            | op::IREM
+            | op::LREM
+            | op::GETSTATIC..=op::INVOKEDYNAMIC
+            | op::NEW..=op::MONITOREXIT
+            | op::MULTIANEWARRAY
     )
 }
 
@@ -32,8 +33,10 @@ pub(super) enum BranchFact {
 
 pub(super) fn branch_fact(opcode: u8, frame: &Frame) -> Option<BranchFact> {
     match opcode {
-        0x99 | 0x9a => frame.top_instanceof_fact().map(BranchFact::InstanceOf),
-        0xc6 | 0xc7 => known_nullness(frame.top_value()?.value).map(BranchFact::Null),
+        op::IFEQ | op::IFNE => frame.top_instanceof_fact().map(BranchFact::InstanceOf),
+        op::IFNULL | op::IFNONNULL => {
+            known_nullness(frame.top_value()?.value).map(BranchFact::Null)
+        }
         _ => None,
     }
 }
@@ -67,8 +70,8 @@ pub(super) fn branch_edge_is_feasible(
     };
     let branch_taken = matches!(edge_kind, EdgeKind::Branch);
     match opcode {
-        0xc6 => branch_taken == *is_null,
-        0xc7 => branch_taken != *is_null,
+        op::IFNULL => branch_taken == *is_null,
+        op::IFNONNULL => branch_taken != *is_null,
         _ => true,
     }
 }
@@ -76,7 +79,7 @@ pub(super) fn branch_edge_is_feasible(
 pub(super) const fn instanceof_true_edge(opcode: u8, edge_kind: &EdgeKind) -> bool {
     matches!(
         (opcode, edge_kind),
-        (0x99, EdgeKind::FallThrough) | (0x9a, EdgeKind::Branch)
+        (op::IFEQ, EdgeKind::FallThrough) | (op::IFNE, EdgeKind::Branch)
     )
 }
 
@@ -138,7 +141,7 @@ pub(super) fn propagate_subroutine_return(
     incoming: &mut HashMap<BlockId, Frame>,
     propagation: &mut Propagation<'_>,
 ) {
-    if instruction.opcode != 0xa9 {
+    if instruction.opcode != op::RET {
         return;
     }
 

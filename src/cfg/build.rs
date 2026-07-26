@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use la_arena::Arena;
+use rust_asm::opcodes as op;
 
 use crate::cfg::{BasicBlock, BlockId, ControlFlowGraph, Edge, EdgeKind, ExceptionEdge};
 use crate::ir::{InstructionOperandIr, MethodIr};
@@ -285,37 +286,45 @@ fn invalid_target_diagnostic(method: &MethodIr, source_offset: u16, target: i32)
 }
 
 const fn ends_block(opcode: u8) -> bool {
-    matches!(opcode, 0x99..=0xa9 | 0xaa | 0xab | 0xac..=0xb1 | 0xbf | 0xc6..=0xc9)
+    matches!(
+        opcode,
+        op::IFEQ..=op::RET
+            | op::TABLESWITCH
+            | op::LOOKUPSWITCH
+            | op::IRETURN..=op::RETURN
+            | op::ATHROW
+            | op::IFNULL..=op::JSR_W
+    )
 }
 
 const fn terminates_execution(opcode: u8) -> bool {
-    matches!(opcode, 0xac..=0xb1 | 0xbf)
+    matches!(opcode, op::IRETURN..=op::RETURN | op::ATHROW)
 }
 
 const fn is_unconditional_branch(opcode: u8) -> bool {
-    matches!(opcode, 0xa7 | 0xc8)
+    matches!(opcode, op::GOTO | op::GOTO_W)
 }
 
 const fn is_subroutine_branch(opcode: u8) -> bool {
-    matches!(opcode, 0xa8 | 0xc9)
+    matches!(opcode, op::JSR | op::JSR_W)
 }
 
 const fn is_ret(opcode: u8) -> bool {
-    opcode == 0xa9
+    opcode == op::RET
 }
 
 const fn may_throw(opcode: u8) -> bool {
     matches!(
         opcode,
-        0x12..=0x14
-            | 0x2e..=0x35
-            | 0x4f..=0x56
-            | 0x6c
-            | 0x6d
-            | 0x70
-            | 0x71
-            | 0xb2..=0xbf
-            | 0xc0..=0xc3
-            | 0xc5
+        op::LDC..=op::LDC2_W
+            | op::IALOAD..=op::SALOAD
+            | op::IASTORE..=op::SASTORE
+            | op::IDIV
+            | op::LDIV
+            | op::IREM
+            | op::LREM
+            | op::GETSTATIC..=op::ATHROW
+            | op::CHECKCAST..=op::MONITOREXIT
+            | op::MULTIANEWARRAY
     )
 }

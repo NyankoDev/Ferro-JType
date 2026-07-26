@@ -9,6 +9,7 @@ use crate::{
     ClassName, InferredType, InstructionInference, MethodSummaryResolver, OperandConstraint,
     OperandExpectation, ReferenceType, ReturnType, TypeDescriptor,
 };
+use rust_asm::opcodes as op;
 
 pub(super) fn observe_final_frames(
     method: &MethodIr,
@@ -29,7 +30,7 @@ pub(super) fn observe_final_frames(
 
         for instruction in &method.instructions[block.instruction_range.clone()] {
             let before = frame.clone();
-            if matches!(instruction.opcode, 0xac..=0xb0) {
+            if matches!(instruction.opcode, op::IRETURN..=op::ARETURN) {
                 return_origins.insert(
                     instruction.offset,
                     before.top_value().and_then(|value| value.local_origin),
@@ -69,9 +70,11 @@ fn operand_expectations(
     stack_before: &[InferredType],
 ) -> Vec<OperandExpectation> {
     match instruction.opcode {
-        0xb3 | 0xb5 => field_put_expectations(instruction, stack_before.len()),
-        0xb6..=0xb9 => invocation_expectations(instruction, stack_before.len()),
-        0xac..=0xb0 => return_expectations(method, stack_before.len()),
+        op::PUTSTATIC | op::PUTFIELD => field_put_expectations(instruction, stack_before.len()),
+        op::INVOKEVIRTUAL..=op::INVOKEINTERFACE => {
+            invocation_expectations(instruction, stack_before.len())
+        }
+        op::IRETURN..=op::ARETURN => return_expectations(method, stack_before.len()),
         _ => Vec::new(),
     }
 }
@@ -88,7 +91,7 @@ fn field_put_expectations(
     };
 
     let mut constraints = Vec::with_capacity(2);
-    if instruction.opcode == 0xb5 {
+    if instruction.opcode == op::PUTFIELD {
         constraints.push(OperandConstraint::ReceiverAssignableTo(owner.clone()));
     }
     constraints.push(OperandConstraint::Descriptor(descriptor));
@@ -106,9 +109,10 @@ fn invocation_expectations(
         return Vec::new();
     };
 
-    let mut constraints =
-        Vec::with_capacity(descriptor.parameters().len() + usize::from(instruction.opcode != 0xb8));
-    if instruction.opcode != 0xb8 {
+    let mut constraints = Vec::with_capacity(
+        descriptor.parameters().len() + usize::from(instruction.opcode != op::INVOKESTATIC),
+    );
+    if instruction.opcode != op::INVOKESTATIC {
         constraints.push(OperandConstraint::ReceiverAssignableTo(owner.clone()));
     }
     constraints.extend(
@@ -178,7 +182,7 @@ pub(super) fn collect_inferred_return_type(
     for instruction in method
         .instructions
         .iter()
-        .filter(|instruction| matches!(instruction.opcode, 0xac..=0xb0))
+        .filter(|instruction| matches!(instruction.opcode, op::IRETURN..=op::ARETURN))
     {
         if !return_opcode_matches_descriptor(instruction.opcode, declared_return_type) {
             return None;
@@ -209,7 +213,7 @@ pub(super) fn collect_returned_parameter_index(
     for instruction in method
         .instructions
         .iter()
-        .filter(|instruction| matches!(instruction.opcode, 0xac..=0xb0))
+        .filter(|instruction| matches!(instruction.opcode, op::IRETURN..=op::ARETURN))
     {
         let Some(origin) = return_origins.get(&instruction.offset) else {
             continue;
@@ -243,7 +247,7 @@ fn return_opcode_matches_descriptor(opcode: u8, descriptor: &TypeDescriptor) -> 
     matches!(
         (opcode, descriptor),
         (
-            0xac,
+            op::IRETURN,
             TypeDescriptor::Primitive(
                 crate::PrimitiveType::Boolean
                     | crate::PrimitiveType::Byte
@@ -251,26 +255,31 @@ fn return_opcode_matches_descriptor(opcode: u8, descriptor: &TypeDescriptor) -> 
                     | crate::PrimitiveType::Short
                     | crate::PrimitiveType::Int
             )
-        ) | (0xad, TypeDescriptor::Primitive(crate::PrimitiveType::Long))
-            | (0xae, TypeDescriptor::Primitive(crate::PrimitiveType::Float))
-            | (
-                0xaf,
-                TypeDescriptor::Primitive(crate::PrimitiveType::Double)
-            )
-            | (
-                0xb0,
-                TypeDescriptor::Reference(_) | TypeDescriptor::Array { .. }
-            )
+        ) | (
+            op::LRETURN,
+            TypeDescriptor::Primitive(crate::PrimitiveType::Long)
+        ) | (
+            op::FRETURN,
+            TypeDescriptor::Primitive(crate::PrimitiveType::Float)
+        ) | (
+            op::DRETURN,
+            TypeDescriptor::Primitive(crate::PrimitiveType::Double)
+        ) | (
+            op::ARETURN,
+            TypeDescriptor::Reference(_) | TypeDescriptor::Array { .. }
+        )
     )
 }
 
 fn return_value_matches_opcode(opcode: u8, value: &InferredType) -> bool {
-    (opcode == 0xac && value.integral_types().is_some())
+    (opcode == op::IRETURN && value.integral_types().is_some())
         || matches!(
             (opcode, value),
-            (0xad, InferredType::Long) | (0xae, InferredType::Float) | (0xaf, InferredType::Double)
+            (op::LRETURN, InferredType::Long)
+                | (op::FRETURN, InferredType::Float)
+                | (op::DRETURN, InferredType::Double)
         )
-        || (opcode == 0xb0 && reference_value(value))
+        || (opcode == op::ARETURN && reference_value(value))
 }
 
 fn reference_value(value: &InferredType) -> bool {
@@ -356,14 +365,14 @@ fn catch_local_types(method: &MethodIr) -> BTreeMap<u16, BTreeSet<ClassName>> {
 fn reference_store_local(instruction: &InstructionIr) -> Option<u16> {
     match instruction {
         InstructionIr {
-            opcode: 0x3a,
+            opcode: op::ASTORE,
             operand: InstructionOperandIr::Local(slot),
             ..
         } => Some(*slot),
         InstructionIr {
-            opcode: 0x4b..=0x4e,
+            opcode: op::ASTORE_0..=op::ASTORE_3,
             ..
-        } => Some(u16::from(instruction.opcode - 0x4b)),
+        } => Some(u16::from(instruction.opcode - op::ASTORE_0)),
         _ => None,
     }
 }

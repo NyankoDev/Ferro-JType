@@ -6,6 +6,7 @@ use crate::{
     ClassName, FieldSummaries, FieldSummaryResolver, InferredType, MethodInference, TypeDescriptor,
     TypeHierarchy,
 };
+use rust_asm::opcodes as op;
 
 pub(super) struct StaticFieldResolver<'a> {
     external: Option<&'a dyn FieldSummaryResolver>,
@@ -55,7 +56,7 @@ pub(super) fn update_local_static_field_summaries(
     for instruction in method
         .instructions
         .iter()
-        .filter(|instruction| instruction.opcode == 0xb3)
+        .filter(|instruction| instruction.opcode == op::PUTSTATIC)
     {
         let Some(key) = local_static_field_key(class, instruction) else {
             continue;
@@ -103,7 +104,7 @@ pub(super) fn local_field_readers(class: &ClassIr) -> HashMap<FieldKey, Vec<usiz
         for instruction in method
             .instructions
             .iter()
-            .filter(|instruction| instruction.opcode == 0xb2)
+            .filter(|instruction| instruction.opcode == op::GETSTATIC)
         {
             let Some(key) = local_static_field_key(class, instruction) else {
                 continue;

@@ -6,6 +6,7 @@ use ferro_babe::model::{
 use ferro_babe::{Class, Disassembler, RecoveryMode};
 use rust_asm::class_reader::{AttributeInfo, read_class_file};
 use rust_asm::constant_pool::CpInfo;
+use rust_asm::opcodes as op;
 
 use crate::ir::{
     ClassIr, ConstantKind, ExceptionHandlerIr, InstructionIr, InstructionOperandIr, MemberRefIr,
@@ -470,5 +471,8 @@ fn parse_class_name(value: &str) -> Result<ClassName, Error> {
 }
 
 const fn is_type_operand(opcode: u8) -> bool {
-    matches!(opcode, 0xbb | 0xbd | 0xc0 | 0xc1)
+    matches!(
+        opcode,
+        op::NEW | op::ANEWARRAY | op::CHECKCAST | op::INSTANCEOF
+    )
 }

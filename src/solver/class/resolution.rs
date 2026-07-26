@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::{ClassName, MethodDescriptor, MethodInvocationKind};
+use rust_asm::opcodes as op;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct MethodKey {
@@ -47,11 +48,9 @@ pub(super) fn local_summary_callers(
     let mut callers = vec![Vec::new(); class.methods.len()];
 
     for (caller_index, method) in class.methods.iter().enumerate() {
-        for instruction in method
-            .instructions
-            .iter()
-            .filter(|instruction| matches!(instruction.opcode, 0xb6..=0xb8))
-        {
+        for instruction in method.instructions.iter().filter(|instruction| {
+            matches!(instruction.opcode, op::INVOKEVIRTUAL..=op::INVOKESTATIC)
+        }) {
             let Some((owner, name, descriptor)) = resolved_method_reference(instruction) else {
                 continue;
             };

@@ -5,6 +5,7 @@ use crate::{
     ClassInference, ClassName, DiagnosticSeverity, Error, InferenceConfig, InferredType,
     MethodDescriptor, MethodInvocationKind, MethodSummaries, MethodSummaryResolver,
 };
+use rust_asm::opcodes as op;
 
 use super::resolution::{BatchCallTargets, BatchMethodKey, MethodKey, resolved_method_reference};
 use super::summaries::analyze_class_with_method_summaries;
@@ -208,11 +209,9 @@ fn batch_summary_callers(classes: &[ClassIr]) -> HashMap<BatchMethodKey, Vec<usi
     let mut callers = HashMap::<BatchMethodKey, Vec<usize>>::new();
     for (class_index, class) in classes.iter().enumerate() {
         for method in &class.methods {
-            for instruction in method
-                .instructions
-                .iter()
-                .filter(|instruction| matches!(instruction.opcode, 0xb6..=0xb8))
-            {
+            for instruction in method.instructions.iter().filter(|instruction| {
+                matches!(instruction.opcode, op::INVOKEVIRTUAL..=op::INVOKESTATIC)
+            }) {
                 let Some((owner, name, descriptor)) = resolved_method_reference(instruction) else {
                     continue;
                 };

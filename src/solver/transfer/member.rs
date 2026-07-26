@@ -5,6 +5,7 @@ use crate::{
     Diagnostic, InferredType, MethodDescriptor, MethodInvocationKind, ReferenceType, ReturnType,
     TypeDescriptor,
 };
+use rust_asm::opcodes as op;
 
 use super::{discard, pop, pop_value, unsupported};
 
@@ -61,8 +62,8 @@ pub(super) fn invoke_member(
         .collect::<Vec<_>>();
     arguments.reverse();
 
-    let receiver =
-        (instruction.opcode != 0xb8).then(|| pop_value(frame, method, instruction, diagnostics));
+    let receiver = (instruction.opcode != op::INVOKESTATIC)
+        .then(|| pop_value(frame, method, instruction, diagnostics));
     if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, &receiver)
         && name == "<init>"
     {
