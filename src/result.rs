@@ -63,6 +63,18 @@ impl ClassInference {
     pub fn analysis_complete(&self) -> bool {
         self.methods.iter().all(MethodInference::analysis_complete)
     }
+
+    pub(crate) fn mark_batch_analysis_incomplete(&mut self) {
+        for method in &mut self.methods {
+            method.mark_analysis_incomplete();
+        }
+        self.diagnostics.push(Diagnostic::new(
+            crate::DiagnosticSeverity::Error,
+            crate::DiagnosticKind::AnalysisLimitReached,
+            crate::DiagnosticLocation::class_level(),
+            "batch method-summary work-item budget was reached",
+        ));
+    }
 }
 
 /// Type-inference results for a caller-supplied batch of class files.

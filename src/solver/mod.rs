@@ -4,4 +4,4 @@ mod fields;
 mod frame;
 mod transfer;
 
-pub(crate) use class::analyze_class;
+pub(crate) use class::{analyze_class, analyze_classes};

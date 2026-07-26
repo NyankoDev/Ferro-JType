@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use crate::ir::parse_and_lower;
-use crate::solver::analyze_class;
+use crate::solver::{analyze_class, analyze_classes};
 use crate::{
     ClassInference, ClassInferences, Error, FieldSummaryResolver, MethodSummaryResolver,
     TypeHierarchy,
@@ -271,7 +271,10 @@ impl Inferer {
     ///
     /// The batch keeps its input order and rejects duplicate JVM internal class
     /// names. This method never reads a JAR, directory, class loader, JDK, or
-    /// Java runtime; it only analyzes the supplied class-file bytes.
+    /// Java runtime; it only analyzes the supplied class-file bytes. Static and
+    /// special calls to another class in the batch automatically consume that
+    /// class's converged return summary. Calls without a uniquely provable
+    /// target keep their descriptor-derived return type.
     pub fn infer_classes<I, B>(&self, class_files: I) -> Result<ClassInferences, Error>
     where
         I: IntoIterator<Item = B>,
@@ -289,11 +292,7 @@ impl Inferer {
             classes.push(class);
         }
 
-        classes
-            .iter()
-            .map(|class| analyze_class(class, &self.config))
-            .collect::<Result<Vec<_>, _>>()
-            .map(ClassInferences::new)
+        analyze_classes(&classes, &self.config).map(ClassInferences::new)
     }
 }
 
