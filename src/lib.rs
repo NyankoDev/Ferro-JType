@@ -7,7 +7,8 @@
 //! when analysis limits or strict diagnostic handling need to be customized.
 //! The returned [`ClassInference`] exposes inferred method, local-variable, and
 //! operand-stack types without requiring a JDK, Java runtime, or external class
-//! hierarchy.
+//! hierarchy. Use [`infer_classes`] to analyze a caller-supplied batch of class
+//! files.
 //!
 //! Class names use the JVM internal form, such as `java/lang/String`.
 
@@ -22,12 +23,13 @@ mod solver;
 mod summary;
 mod types;
 
-pub use api::{InferenceConfig, Inferer, infer_class};
+pub use api::{InferenceConfig, Inferer, infer_class, infer_classes};
 pub use diagnostic::{Diagnostic, DiagnosticKind, DiagnosticLocation, DiagnosticSeverity};
 pub use error::{DescriptorError, Error, NameError};
 pub use hierarchy::{ClassHierarchy, TypeHierarchy};
 pub use result::{
-    ClassInference, InstructionInference, MethodInference, OperandConstraint, OperandExpectation,
+    ClassInference, ClassInferences, InstructionInference, MethodInference, OperandConstraint,
+    OperandExpectation,
 };
 pub use summary::{FieldSummaries, FieldSummaryResolver, MethodSummaries, MethodSummaryResolver};
 pub use types::{

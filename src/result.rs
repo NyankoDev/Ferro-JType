@@ -65,6 +65,53 @@ impl ClassInference {
     }
 }
 
+/// Type-inference results for a caller-supplied batch of class files.
+///
+/// Entries retain the input order. Each JVM internal class name may occur only
+/// once in a batch.
+#[derive(Debug, Clone)]
+pub struct ClassInferences {
+    classes: Vec<ClassInference>,
+}
+
+impl ClassInferences {
+    pub(crate) const fn new(classes: Vec<ClassInference>) -> Self {
+        Self { classes }
+    }
+
+    /// Returns inference results in the same order as the input class files.
+    #[must_use]
+    pub fn classes(&self) -> &[ClassInference] {
+        &self.classes
+    }
+
+    /// Returns the result for one JVM internal class name.
+    #[must_use]
+    pub fn get(&self, class_name: &ClassName) -> Option<&ClassInference> {
+        self.classes
+            .iter()
+            .find(|inference| inference.class_name() == class_name)
+    }
+
+    /// Returns the number of analyzed class files.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.classes.len()
+    }
+
+    /// Returns whether the batch contains no class files.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.classes.is_empty()
+    }
+
+    /// Returns whether analysis completed for every class in the batch.
+    #[must_use]
+    pub fn analysis_complete(&self) -> bool {
+        self.classes.iter().all(ClassInference::analysis_complete)
+    }
+}
+
 /// Type-inference results for one method.
 ///
 /// Parameter and return types come from the method descriptor. Local-variable

@@ -62,6 +62,12 @@ pub enum Error {
     /// Recovery produced an incomplete class representation.
     #[error("class file recovery did not produce a complete class")]
     IncompleteClass,
+    /// More than one batch input declared the same internal class name.
+    #[error("duplicate class input for `{class_name}`")]
+    DuplicateClass {
+        /// The duplicate JVM internal class name.
+        class_name: crate::ClassName,
+    },
     /// The class-file structure could not be traversed safely before inference.
     #[error("invalid class-file structure: {message}")]
     InvalidClassFile {

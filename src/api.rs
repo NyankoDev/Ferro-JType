@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use crate::ir::parse_and_lower;
 use crate::solver::analyze_class;
-use crate::{ClassInference, Error, FieldSummaryResolver, MethodSummaryResolver, TypeHierarchy};
+use crate::{
+    ClassInference, ClassInferences, Error, FieldSummaryResolver, MethodSummaryResolver,
+    TypeHierarchy,
+};
 
 /// Configuration for a bounded class-file type-inference run.
 ///
@@ -263,6 +266,35 @@ impl Inferer {
         let class = parse_and_lower(bytes)?;
         analyze_class(&class, &self.config)
     }
+
+    /// Infers types from a batch of complete Java class files.
+    ///
+    /// The batch keeps its input order and rejects duplicate JVM internal class
+    /// names. This method never reads a JAR, directory, class loader, JDK, or
+    /// Java runtime; it only analyzes the supplied class-file bytes.
+    pub fn infer_classes<I, B>(&self, class_files: I) -> Result<ClassInferences, Error>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
+        let mut names = BTreeSet::new();
+        let mut classes = Vec::new();
+        for bytes in class_files {
+            let class = parse_and_lower(bytes.as_ref())?;
+            if !names.insert(class.name.clone()) {
+                return Err(Error::DuplicateClass {
+                    class_name: class.name,
+                });
+            }
+            classes.push(class);
+        }
+
+        classes
+            .iter()
+            .map(|class| analyze_class(class, &self.config))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ClassInferences::new)
+    }
 }
 
 /// Infers types from one complete Java class file using [`InferenceConfig::default`].
@@ -270,4 +302,16 @@ impl Inferer {
 /// Use [`Inferer`] when custom limits or strict diagnostic handling are needed.
 pub fn infer_class(bytes: &[u8]) -> Result<ClassInference, Error> {
     Inferer::default().infer_class(bytes)
+}
+
+/// Infers types from caller-supplied Java class files using [`InferenceConfig::default`].
+///
+/// Use [`Inferer`] when custom limits, strict diagnostic handling, or shared
+/// summaries are needed.
+pub fn infer_classes<I, B>(class_files: I) -> Result<ClassInferences, Error>
+where
+    I: IntoIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
+    Inferer::default().infer_classes(class_files)
 }
