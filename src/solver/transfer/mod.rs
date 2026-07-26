@@ -1,12 +1,15 @@
-use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
-use crate::solver::frame::{
-    Frame, FrameValue, InstanceOfFact, ValueOrigin, inferred_from_descriptor,
-};
-use crate::summary::{FieldSummaryResolver, MethodSummaryResolver, value_type_matches_descriptor};
-use crate::{
-    ClassName, Diagnostic, InferredType, IntegralTypeSet, MethodDescriptor, MethodInvocationKind,
-    ReferenceType, ReturnType, TypeDescriptor,
-};
+use crate::ir::{ConstantKind, InstructionIr, InstructionOperandIr, MethodIr};
+use crate::solver::frame::{Frame, InstanceOfFact, inferred_from_descriptor};
+use crate::summary::{FieldSummaryResolver, MethodSummaryResolver};
+use crate::{ClassName, Diagnostic, InferredType, IntegralTypeSet, ReferenceType, TypeDescriptor};
+
+mod array;
+mod member;
+mod stack;
+
+use array::*;
+use member::*;
+use stack::*;
 
 pub(crate) fn transfer(
     method: &MethodIr,
@@ -214,93 +217,6 @@ fn local_index(instruction: &InstructionIr, wide_opcode: u8, short_base: u8) -> 
         .map(u16::from)
 }
 
-fn array_load(
-    frame: &mut Frame,
-    result: InferredType,
-    method: &MethodIr,
-    instruction: &InstructionIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    discard(frame, method, instruction, diagnostics);
-    frame.push(result);
-}
-
-fn integral_array_load(
-    frame: &mut Frame,
-    fallback: IntegralTypeSet,
-    method: &MethodIr,
-    instruction: &InstructionIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    let array = pop(frame, method, instruction, diagnostics);
-    let result = primitive_array_element(&array)
-        .filter(|element| {
-            element
-                .exact_type()
-                .is_some_and(|primitive| fallback.contains(primitive))
-        })
-        .unwrap_or(fallback);
-    frame.push(InferredType::from_integral_types(result));
-}
-
-fn primitive_array_element(array: &InferredType) -> Option<IntegralTypeSet> {
-    let InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
-        dimensions: 1,
-        element,
-    })) = array
-    else {
-        return None;
-    };
-
-    let TypeDescriptor::Primitive(primitive) = element.as_ref() else {
-        return None;
-    };
-    IntegralTypeSet::from_primitive(*primitive)
-}
-
-fn reference_array_load(
-    frame: &mut Frame,
-    method: &MethodIr,
-    instruction: &InstructionIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    let array = pop(frame, method, instruction, diagnostics);
-    frame.push(reference_array_element_type(&array));
-}
-
-fn reference_array_element_type(array: &InferredType) -> InferredType {
-    let InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
-        dimensions,
-        element,
-    })) = array
-    else {
-        return InferredType::Reference(ReferenceType::Unknown);
-    };
-
-    if *dimensions == 1 {
-        return inferred_from_descriptor(element);
-    }
-
-    InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
-        dimensions: dimensions - 1,
-        element: element.clone(),
-    }))
-}
-
-fn array_store(
-    frame: &mut Frame,
-    method: &MethodIr,
-    instruction: &InstructionIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    discard(frame, method, instruction, diagnostics);
-    discard(frame, method, instruction, diagnostics);
-}
-
 fn binary(
     frame: &mut Frame,
     result: InferredType,
@@ -341,310 +257,12 @@ fn increment_local(instruction: &InstructionIr, frame: &mut Frame) {
     frame.set_local(local, InferredType::Int);
 }
 
-fn field_get(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    has_receiver: bool,
-    field_summaries: Option<&dyn FieldSummaryResolver>,
-) {
-    if has_receiver {
-        discard(frame, method, instruction, diagnostics);
-    }
-    let field_summaries = (!has_receiver).then_some(field_summaries).flatten();
-    frame.push(field_type(
-        instruction,
-        method,
-        diagnostics,
-        field_summaries,
-    ));
-}
-
-fn field_put(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    has_receiver: bool,
-) {
-    discard(frame, method, instruction, diagnostics);
-    if has_receiver {
-        discard(frame, method, instruction, diagnostics);
-    }
-}
-
-fn invoke_member(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    method_summaries: Option<&dyn MethodSummaryResolver>,
-) {
-    let Some((descriptor, member)) = method_call_descriptor(instruction, method, diagnostics)
-    else {
-        frame.clear_stack();
-        return;
-    };
-
-    let mut arguments = descriptor
-        .parameters()
-        .iter()
-        .map(|_| pop(frame, method, instruction, diagnostics))
-        .collect::<Vec<_>>();
-    arguments.reverse();
-
-    let receiver =
-        (instruction.opcode != 0xb8).then(|| pop_value(frame, method, instruction, diagnostics));
-    if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, &receiver)
-        && name == "<init>"
-    {
-        match &receiver.value {
-            InferredType::Uninitialized {
-                allocation_offset, ..
-            } => frame.replace_uninitialized(*allocation_offset, owner.clone()),
-            InferredType::UninitializedThis { class_name } => {
-                frame.replace_uninitialized_this(class_name.clone())
-            }
-            _ => {}
-        }
-    }
-
-    let invocation_kind = MethodInvocationKind::from_opcode(instruction.opcode);
-    let receiver_is_exact_allocation = receiver_is_exact_allocation(member, receiver.as_ref());
-    let summary_return_type = invocation_kind.and_then(|invocation_kind| {
-        member.and_then(|member| {
-            resolve_method_summary(
-                member,
-                &descriptor,
-                method_summaries,
-                invocation_kind,
-                receiver_is_exact_allocation,
-            )
-        })
-    });
-    let parameter_return_type = invocation_kind.and_then(|invocation_kind| {
-        member.and_then(|member| {
-            resolve_returned_parameter(
-                member,
-                &descriptor,
-                method_summaries,
-                invocation_kind,
-                &arguments,
-                receiver_is_exact_allocation,
-            )
-        })
-    });
-    push_return_type(
-        &descriptor,
-        parameter_return_type.or(summary_return_type),
-        frame,
-    );
-}
-
-fn invoke_dynamic(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let InstructionOperandIr::InvokeDynamic { descriptor, .. } = &instruction.operand else {
-        return;
-    };
-    let Some(descriptor) = descriptor
-        .as_deref()
-        .and_then(|descriptor| MethodDescriptor::parse(descriptor).ok())
-    else {
-        unsupported(method, instruction, diagnostics);
-        frame.clear_stack();
-        return;
-    };
-
-    for _ in descriptor.parameters() {
-        discard(frame, method, instruction, diagnostics);
-    }
-    push_return_type(&descriptor, None, frame);
-}
-
-fn method_call_descriptor<'a>(
-    instruction: &'a InstructionIr,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<(MethodDescriptor, Option<&'a MemberRefIr>)> {
-    let member = match &instruction.operand {
-        InstructionOperandIr::Member(member) => member,
-        InstructionOperandIr::InvokeInterface { method, .. } => method,
-        _ => return None,
-    };
-    let MemberRefIr::Resolved { descriptor, .. } = member else {
-        unsupported(method, instruction, diagnostics);
-        return None;
-    };
-
-    match MethodDescriptor::parse(descriptor) {
-        Ok(descriptor) => Some((descriptor, Some(member))),
-        Err(_) => {
-            unsupported(method, instruction, diagnostics);
-            None
-        }
-    }
-}
-
-fn resolve_method_summary(
-    member: &MemberRefIr,
-    descriptor: &MethodDescriptor,
-    method_summaries: Option<&dyn MethodSummaryResolver>,
-    invocation_kind: MethodInvocationKind,
-    receiver_is_exact_allocation: bool,
-) -> Option<InferredType> {
-    let MemberRefIr::Resolved { owner, name, .. } = member else {
-        return None;
-    };
-    let return_type = method_summaries?.return_type_for_call(
-        owner,
-        name,
-        descriptor,
-        invocation_kind,
-        receiver_is_exact_allocation,
-    )?;
-    method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
-}
-
-fn resolve_returned_parameter(
-    member: &MemberRefIr,
-    descriptor: &MethodDescriptor,
-    method_summaries: Option<&dyn MethodSummaryResolver>,
-    invocation_kind: MethodInvocationKind,
-    arguments: &[InferredType],
-    receiver_is_exact_allocation: bool,
-) -> Option<InferredType> {
-    let MemberRefIr::Resolved { owner, name, .. } = member else {
-        return None;
-    };
-    let parameter_index = method_summaries?.returned_parameter_index_for_call(
-        owner,
-        name,
-        descriptor,
-        invocation_kind,
-        receiver_is_exact_allocation,
-    )?;
-    let return_type = arguments.get(parameter_index)?.clone();
-    method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
-}
-
-fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &InferredType) -> bool {
-    match descriptor.return_type() {
-        ReturnType::Void => false,
-        ReturnType::Type(descriptor) => value_type_matches_descriptor(descriptor, return_type),
-    }
-}
-
-fn push_return_type(
-    descriptor: &MethodDescriptor,
-    summary_return_type: Option<InferredType>,
-    frame: &mut Frame,
-) {
-    if let ReturnType::Type(return_type) = descriptor.return_type() {
-        frame.push(summary_return_type.unwrap_or_else(|| inferred_from_descriptor(return_type)));
-    }
-}
-
-fn field_type(
-    instruction: &InstructionIr,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-    field_summaries: Option<&dyn FieldSummaryResolver>,
-) -> InferredType {
-    let InstructionOperandIr::Member(MemberRefIr::Resolved {
-        owner,
-        name,
-        descriptor,
-    }) = &instruction.operand
-    else {
-        unsupported(method, instruction, diagnostics);
-        return InferredType::Reference(ReferenceType::Unknown);
-    };
-
-    TypeDescriptor::parse(descriptor)
-        .map(|descriptor| {
-            field_summaries
-                .and_then(|resolver| resolver.value_type(owner, name, &descriptor))
-                .filter(|value_type| value_type_matches_descriptor(&descriptor, value_type))
-                .unwrap_or_else(|| inferred_from_descriptor(&descriptor))
-        })
-        .unwrap_or_else(|_| {
-            unsupported(method, instruction, diagnostics);
-            InferredType::Reference(ReferenceType::Unknown)
-        })
-}
-
 fn allocate_object(instruction: &InstructionIr, frame: &mut Frame) {
     let class_name = type_name(instruction).and_then(|name| ClassName::parse(name).ok());
     match class_name {
         Some(class_name) => frame.push_allocation(class_name, instruction.offset),
         None => frame.push(InferredType::Reference(ReferenceType::Unknown)),
     }
-}
-
-fn receiver_is_exact_allocation(
-    member: Option<&MemberRefIr>,
-    receiver: Option<&FrameValue>,
-) -> bool {
-    let Some(MemberRefIr::Resolved { owner, .. }) = member else {
-        return false;
-    };
-    matches!(
-        receiver,
-        Some(FrameValue {
-            value: InferredType::Reference(ReferenceType::Exact(class_name)),
-            local_origin: Some(ValueOrigin::Allocation { .. }),
-            ..
-        }) if class_name == owner
-    )
-}
-
-fn allocate_primitive_array(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    let primitive = match instruction.operand {
-        InstructionOperandIr::Immediate(4) => crate::PrimitiveType::Boolean,
-        InstructionOperandIr::Immediate(5) => crate::PrimitiveType::Char,
-        InstructionOperandIr::Immediate(6) => crate::PrimitiveType::Float,
-        InstructionOperandIr::Immediate(7) => crate::PrimitiveType::Double,
-        InstructionOperandIr::Immediate(8) => crate::PrimitiveType::Byte,
-        InstructionOperandIr::Immediate(9) => crate::PrimitiveType::Short,
-        InstructionOperandIr::Immediate(10) => crate::PrimitiveType::Int,
-        InstructionOperandIr::Immediate(11) => crate::PrimitiveType::Long,
-        _ => {
-            frame.push(InferredType::Reference(ReferenceType::Unknown));
-            return;
-        }
-    };
-    frame.push(InferredType::Reference(ReferenceType::Array(
-        TypeDescriptor::Array {
-            dimensions: 1,
-            element: Box::new(TypeDescriptor::Primitive(primitive)),
-        },
-    )));
-}
-
-fn allocate_reference_array(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    discard(frame, method, instruction, diagnostics);
-    let reference = type_name(instruction)
-        .and_then(array_element_descriptor)
-        .and_then(array_of)
-        .map(ReferenceType::Array)
-        .unwrap_or(ReferenceType::Unknown);
-    frame.push(InferredType::Reference(reference));
 }
 
 fn cast_reference(
@@ -689,55 +307,11 @@ fn instance_of(
     frame.push_instanceof_result(fact);
 }
 
-fn allocate_multi_array(
-    instruction: &InstructionIr,
-    frame: &mut Frame,
-    method: &MethodIr,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let dimensions = match instruction.operand {
-        InstructionOperandIr::MultiArray { dimensions, .. } => dimensions,
-        _ => 0,
-    };
-    for _ in 0..dimensions {
-        discard(frame, method, instruction, diagnostics);
-    }
-    let reference = type_name(instruction)
-        .and_then(|name| TypeDescriptor::parse(name).ok())
-        .and_then(|descriptor| match descriptor {
-            descriptor @ TypeDescriptor::Array { .. } => Some(ReferenceType::Array(descriptor)),
-            TypeDescriptor::Primitive(_) | TypeDescriptor::Reference(_) => None,
-        })
-        .unwrap_or(ReferenceType::Unknown);
-    frame.push(InferredType::Reference(reference));
-}
-
-fn type_name(instruction: &InstructionIr) -> Option<&str> {
+pub(super) fn type_name(instruction: &InstructionIr) -> Option<&str> {
     match &instruction.operand {
         InstructionOperandIr::Type { type_name, .. }
         | InstructionOperandIr::MultiArray { type_name, .. } => type_name.as_deref(),
         _ => None,
-    }
-}
-
-fn array_element_descriptor(name: &str) -> Option<TypeDescriptor> {
-    reference_descriptor(name)
-        .or_else(|| ClassName::parse(name).ok().map(TypeDescriptor::Reference))
-}
-
-fn array_of(component: TypeDescriptor) -> Option<TypeDescriptor> {
-    match component {
-        TypeDescriptor::Array {
-            dimensions,
-            element,
-        } => Some(TypeDescriptor::Array {
-            dimensions: dimensions.checked_add(1)?,
-            element,
-        }),
-        element => Some(TypeDescriptor::Array {
-            dimensions: 1,
-            element: Box::new(element),
-        }),
     }
 }
 
@@ -797,7 +371,3 @@ fn push_subroutine_return_address(
         None => frame.push(InferredType::ReturnAddress),
     }
 }
-
-mod stack;
-
-use stack::*;
