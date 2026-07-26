@@ -273,8 +273,10 @@ impl Inferer {
     /// names. This method never reads a JAR, directory, class loader, JDK, or
     /// Java runtime; it only analyzes the supplied class-file bytes. Static and
     /// special calls to another class in the batch automatically consume that
-    /// class's converged return summary. Calls without a uniquely provable
-    /// target keep their descriptor-derived return type.
+    /// class's converged return summary. Virtual calls do the same only for a
+    /// `final` class, a `final` method, or a fresh allocation of the member
+    /// owner. Calls without a uniquely provable target keep their
+    /// descriptor-derived return type.
     pub fn infer_classes<I, B>(&self, class_files: I) -> Result<ClassInferences, Error>
     where
         I: IntoIterator<Item = B>,

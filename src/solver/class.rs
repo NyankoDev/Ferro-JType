@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ir::{ClassIr, InstructionIr, InstructionOperandIr, MemberRefIr, MethodIr};
 use crate::{
@@ -149,6 +149,7 @@ pub(crate) fn analyze_classes(
     config: &InferenceConfig,
 ) -> Result<Vec<ClassInference>, Error> {
     let callers = batch_summary_callers(classes);
+    let targets = BatchCallTargets::from_classes(classes);
     let mut summaries = MethodSummaries::new();
     let mut analyses = (0..classes.len())
         .map(|_| None)
@@ -172,6 +173,7 @@ pub(crate) fn analyze_classes(
         let resolver = BatchSummaryResolver {
             external: config.method_summaries(),
             summaries: &summaries,
+            targets: &targets,
             current_owner: &class.name,
         };
         let inference = analyze_class_with_method_summaries(class, config, Some(&resolver))?;
@@ -218,6 +220,7 @@ pub(crate) fn analyze_classes(
 struct BatchSummaryResolver<'a> {
     external: Option<&'a dyn MethodSummaryResolver>,
     summaries: &'a MethodSummaries,
+    targets: &'a BatchCallTargets,
     current_owner: &'a ClassName,
 }
 
@@ -228,11 +231,15 @@ impl BatchSummaryResolver<'_> {
         name: &str,
         descriptor: &MethodDescriptor,
         invocation_kind: MethodInvocationKind,
+        receiver_is_exact_allocation: bool,
     ) -> Option<InferredType> {
         if owner == self.current_owner
-            || !matches!(
+            || !self.targets.is_deterministic(
+                owner,
+                name,
+                descriptor,
                 invocation_kind,
-                MethodInvocationKind::Static | MethodInvocationKind::Special
+                receiver_is_exact_allocation,
             )
         {
             return None;
@@ -263,7 +270,7 @@ impl MethodSummaryResolver for BatchSummaryResolver<'_> {
             .and_then(|resolver| {
                 resolver.return_type_for_invocation(owner, name, descriptor, invocation_kind)
             })
-            .or_else(|| self.batch_return_type(owner, name, descriptor, invocation_kind))
+            .or_else(|| self.batch_return_type(owner, name, descriptor, invocation_kind, false))
     }
 
     fn return_type_for_call(
@@ -284,7 +291,15 @@ impl MethodSummaryResolver for BatchSummaryResolver<'_> {
                     receiver_is_exact_allocation,
                 )
             })
-            .or_else(|| self.batch_return_type(owner, name, descriptor, invocation_kind))
+            .or_else(|| {
+                self.batch_return_type(
+                    owner,
+                    name,
+                    descriptor,
+                    invocation_kind,
+                    receiver_is_exact_allocation,
+                )
+            })
     }
 }
 
@@ -331,7 +346,7 @@ fn batch_summary_callers(classes: &[ClassIr]) -> HashMap<BatchMethodKey, Vec<usi
             for instruction in method
                 .instructions
                 .iter()
-                .filter(|instruction| matches!(instruction.opcode, 0xb7 | 0xb8))
+                .filter(|instruction| matches!(instruction.opcode, 0xb6..=0xb8))
             {
                 let Some((owner, name, descriptor)) = resolved_method_reference(instruction) else {
                     continue;
@@ -357,6 +372,60 @@ fn batch_summary_callers(classes: &[ClassIr]) -> HashMap<BatchMethodKey, Vec<usi
         callers.dedup();
     }
     callers
+}
+
+struct BatchCallTargets {
+    final_classes: HashSet<ClassName>,
+    final_methods: HashSet<BatchMethodKey>,
+}
+
+impl BatchCallTargets {
+    fn from_classes(classes: &[ClassIr]) -> Self {
+        let mut final_classes = HashSet::new();
+        let mut final_methods = HashSet::new();
+        for class in classes {
+            if class.access_flags & 0x0010 != 0 {
+                final_classes.insert(class.name.clone());
+            }
+            for method in &class.methods {
+                if method.access_flags & 0x0010 != 0 {
+                    final_methods.insert(BatchMethodKey {
+                        owner: class.name.clone(),
+                        method: MethodKey::from_method(method),
+                    });
+                }
+            }
+        }
+        Self {
+            final_classes,
+            final_methods,
+        }
+    }
+
+    fn is_deterministic(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+        receiver_is_exact_allocation: bool,
+    ) -> bool {
+        match invocation_kind {
+            MethodInvocationKind::Static | MethodInvocationKind::Special => true,
+            MethodInvocationKind::Virtual => {
+                receiver_is_exact_allocation
+                    || self.final_classes.contains(owner)
+                    || self.final_methods.contains(&BatchMethodKey {
+                        owner: owner.clone(),
+                        method: MethodKey {
+                            name: name.to_owned(),
+                            descriptor: descriptor.clone(),
+                        },
+                    })
+            }
+            MethodInvocationKind::Interface => false,
+        }
+    }
 }
 
 struct ClassSummaryResolver<'a> {
