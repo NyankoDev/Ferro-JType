@@ -259,19 +259,22 @@ pub(crate) fn value_type_matches_descriptor(
     value_type: &InferredType,
 ) -> bool {
     match descriptor {
-        TypeDescriptor::Primitive(primitive) => matches!(
-            (primitive, value_type),
-            (
-                crate::PrimitiveType::Boolean
-                    | crate::PrimitiveType::Byte
-                    | crate::PrimitiveType::Char
-                    | crate::PrimitiveType::Short
-                    | crate::PrimitiveType::Int,
-                InferredType::Int
-            ) | (crate::PrimitiveType::Float, InferredType::Float)
-                | (crate::PrimitiveType::Long, InferredType::Long)
-                | (crate::PrimitiveType::Double, InferredType::Double)
-        ),
+        TypeDescriptor::Primitive(
+            crate::PrimitiveType::Boolean
+            | crate::PrimitiveType::Byte
+            | crate::PrimitiveType::Char
+            | crate::PrimitiveType::Short
+            | crate::PrimitiveType::Int,
+        ) => value_type.integral_types().is_some(),
+        TypeDescriptor::Primitive(crate::PrimitiveType::Float) => {
+            matches!(value_type, InferredType::Float)
+        }
+        TypeDescriptor::Primitive(crate::PrimitiveType::Long) => {
+            matches!(value_type, InferredType::Long)
+        }
+        TypeDescriptor::Primitive(crate::PrimitiveType::Double) => {
+            matches!(value_type, InferredType::Double)
+        }
         TypeDescriptor::Reference(_) | TypeDescriptor::Array { .. } => {
             reference_value_matches_descriptor(descriptor, value_type)
         }

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::hierarchy::{TypeHierarchy, common_supertype};
-use crate::{ClassName, PrimitiveType, TypeDescriptor};
+use crate::{ClassName, IntegralTypeSet, PrimitiveType, TypeDescriptor};
 
 /// Inferred state for a JVM reference value.
 ///
@@ -50,14 +50,17 @@ impl ReferenceType {
 
 /// Abstract JVM type inferred for a local variable or operand-stack value.
 ///
-/// The integral JVM verification types `boolean`, `byte`, `char`, `short`, and
-/// `int` are represented by [`Self::Int`].
+/// `boolean`, `byte`, `char`, `short`, and `int` share the integral JVM
+/// verification category. [`Self::Integral`] retains source-level candidates
+/// when bytecode supplies evidence more precise than that category.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InferredType {
     /// No control-flow path has supplied a value for this position yet.
     Bottom,
-    /// A category-one JVM integral value.
+    /// A JVM integral value with exact `int` evidence.
     Int,
+    /// A JVM integral value with one or more compatible source-level candidates.
+    Integral(IntegralTypeSet),
     /// A category-one JVM floating-point value.
     Float,
     /// A category-two JVM integral value.
@@ -182,19 +185,21 @@ fn compare_inferred_types(left: &InferredType, right: &InferredType) -> Ordering
     let rank = |value: &InferredType| match value {
         InferredType::Bottom => 0,
         InferredType::Int => 1,
-        InferredType::Float => 2,
-        InferredType::Long => 3,
-        InferredType::Double => 4,
-        InferredType::Reference(_) => 5,
-        InferredType::Uninitialized { .. } => 6,
-        InferredType::UninitializedThis { .. } => 7,
-        InferredType::ReturnAddress => 8,
-        InferredType::Alternatives(_) => 9,
-        InferredType::Conflict => 10,
+        InferredType::Integral(_) => 2,
+        InferredType::Float => 3,
+        InferredType::Long => 4,
+        InferredType::Double => 5,
+        InferredType::Reference(_) => 6,
+        InferredType::Uninitialized { .. } => 7,
+        InferredType::UninitializedThis { .. } => 8,
+        InferredType::ReturnAddress => 9,
+        InferredType::Alternatives(_) => 10,
+        InferredType::Conflict => 11,
     };
     rank(left)
         .cmp(&rank(right))
         .then_with(|| match (left, right) {
+            (InferredType::Integral(left), InferredType::Integral(right)) => left.cmp(right),
             (InferredType::Reference(left), InferredType::Reference(right)) => {
                 compare_references(left, right)
             }
@@ -289,6 +294,28 @@ const fn primitive_rank(value: PrimitiveType) -> u8 {
 }
 
 impl InferredType {
+    /// Returns source-level candidates for an integral JVM value.
+    ///
+    /// `None` means this value is not in the integral JVM verification
+    /// category. [`IntegralTypeSet::ALL`] means the bytecode did not preserve a
+    /// unique source-level type.
+    #[must_use]
+    pub const fn integral_types(&self) -> Option<IntegralTypeSet> {
+        match self {
+            Self::Int => Some(IntegralTypeSet::INT),
+            Self::Integral(types) => Some(*types),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn from_integral_types(types: IntegralTypeSet) -> Self {
+        if types == IntegralTypeSet::INT {
+            Self::Int
+        } else {
+            Self::Integral(types)
+        }
+    }
+
     /// Conservatively joins two types at a control-flow merge point.
     ///
     /// Compatible values preserve their type. Incompatible primitive or
@@ -309,6 +336,10 @@ impl InferredType {
             (reference_alternatives(self), reference_alternatives(other))
         {
             return join_reference_alternatives(&left, &right, hierarchy);
+        }
+
+        if let (Some(left), Some(right)) = (self.integral_types(), other.integral_types()) {
+            return Self::from_integral_types(left.union(right));
         }
 
         match (self, other) {

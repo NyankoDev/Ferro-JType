@@ -4,8 +4,8 @@ use crate::solver::frame::{
 };
 use crate::summary::{FieldSummaryResolver, MethodSummaryResolver, value_type_matches_descriptor};
 use crate::{
-    ClassName, Diagnostic, InferredType, MethodDescriptor, MethodInvocationKind, ReferenceType,
-    ReturnType, TypeDescriptor,
+    ClassName, Diagnostic, InferredType, IntegralTypeSet, MethodDescriptor, MethodInvocationKind,
+    ReferenceType, ReturnType, TypeDescriptor,
 };
 
 pub(crate) fn transfer(
@@ -19,7 +19,7 @@ pub(crate) fn transfer(
     match instruction.opcode {
         0x00 => {}
         0x01 => frame.push(InferredType::Reference(ReferenceType::Null)),
-        0x02..=0x08 | 0x10 | 0x11 => frame.push(InferredType::Int),
+        0x02..=0x08 | 0x10 | 0x11 => frame.push(InferredType::Integral(IntegralTypeSet::ALL)),
         0x09..=0x0a => frame.push(InferredType::Long),
         0x0b..=0x0d => frame.push(InferredType::Float),
         0x0e..=0x0f => frame.push(InferredType::Double),
@@ -29,9 +29,34 @@ pub(crate) fn transfer(
         0x17 | 0x22..=0x25 => load_local(instruction, frame, 0x17, 0x22),
         0x18 | 0x26..=0x29 => load_local(instruction, frame, 0x18, 0x26),
         0x19 | 0x2a..=0x2d => load_local(instruction, frame, 0x19, 0x2a),
-        0x2e | 0x33..=0x35 => {
-            array_load(frame, InferredType::Int, method, instruction, diagnostics)
-        }
+        0x2e => integral_array_load(
+            frame,
+            IntegralTypeSet::INT,
+            method,
+            instruction,
+            diagnostics,
+        ),
+        0x33 => integral_array_load(
+            frame,
+            IntegralTypeSet::BOOLEAN.union(IntegralTypeSet::BYTE),
+            method,
+            instruction,
+            diagnostics,
+        ),
+        0x34 => integral_array_load(
+            frame,
+            IntegralTypeSet::CHAR,
+            method,
+            instruction,
+            diagnostics,
+        ),
+        0x35 => integral_array_load(
+            frame,
+            IntegralTypeSet::SHORT,
+            method,
+            instruction,
+            diagnostics,
+        ),
         0x2f => array_load(frame, InferredType::Long, method, instruction, diagnostics),
         0x30 => array_load(frame, InferredType::Float, method, instruction, diagnostics),
         0x31 => array_load(
@@ -85,9 +110,28 @@ pub(crate) fn transfer(
             instruction,
             diagnostics,
         ),
-        0x88 | 0x8b | 0x8e | 0x91 | 0x92 | 0x93 => {
-            convert(frame, InferredType::Int, method, instruction, diagnostics)
-        }
+        0x88 | 0x8b | 0x8e => convert(frame, InferredType::Int, method, instruction, diagnostics),
+        0x91 => convert(
+            frame,
+            InferredType::Integral(IntegralTypeSet::BYTE),
+            method,
+            instruction,
+            diagnostics,
+        ),
+        0x92 => convert(
+            frame,
+            InferredType::Integral(IntegralTypeSet::CHAR),
+            method,
+            instruction,
+            diagnostics,
+        ),
+        0x93 => convert(
+            frame,
+            InferredType::Integral(IntegralTypeSet::SHORT),
+            method,
+            instruction,
+            diagnostics,
+        ),
         0x89 | 0x8c | 0x8f => convert(frame, InferredType::Long, method, instruction, diagnostics),
         0x8a | 0x8d | 0x90 => convert(frame, InferredType::Float, method, instruction, diagnostics),
         0x94..=0x98 => binary(frame, InferredType::Int, method, instruction, diagnostics),
@@ -180,6 +224,40 @@ fn array_load(
     discard(frame, method, instruction, diagnostics);
     discard(frame, method, instruction, diagnostics);
     frame.push(result);
+}
+
+fn integral_array_load(
+    frame: &mut Frame,
+    fallback: IntegralTypeSet,
+    method: &MethodIr,
+    instruction: &InstructionIr,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    discard(frame, method, instruction, diagnostics);
+    let array = pop(frame, method, instruction, diagnostics);
+    let result = primitive_array_element(&array)
+        .filter(|element| {
+            element
+                .exact_type()
+                .is_some_and(|primitive| fallback.contains(primitive))
+        })
+        .unwrap_or(fallback);
+    frame.push(InferredType::from_integral_types(result));
+}
+
+fn primitive_array_element(array: &InferredType) -> Option<IntegralTypeSet> {
+    let InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
+        dimensions: 1,
+        element,
+    })) = array
+    else {
+        return None;
+    };
+
+    let TypeDescriptor::Primitive(primitive) = element.as_ref() else {
+        return None;
+    };
+    IntegralTypeSet::from_primitive(*primitive)
 }
 
 fn reference_array_load(
@@ -673,7 +751,9 @@ fn reference_descriptor(name: &str) -> Option<TypeDescriptor> {
 
 fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
     let value = match &instruction.operand {
-        InstructionOperandIr::Constant(ConstantKind::Integer) => InferredType::Int,
+        InstructionOperandIr::Constant(ConstantKind::Integer) => {
+            InferredType::Integral(IntegralTypeSet::ALL)
+        }
         InstructionOperandIr::Constant(ConstantKind::Float) => InferredType::Float,
         InstructionOperandIr::Constant(ConstantKind::Long) => InferredType::Long,
         InstructionOperandIr::Constant(ConstantKind::Double) => InferredType::Double,

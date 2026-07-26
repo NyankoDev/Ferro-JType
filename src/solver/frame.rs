@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    ClassName, InferredType, MethodDescriptor, ReferenceType, TypeDescriptor,
+    ClassName, InferredType, IntegralTypeSet, MethodDescriptor, ReferenceType, TypeDescriptor,
     types::join_local_types,
 };
 
@@ -218,7 +218,7 @@ impl Frame {
     }
 
     pub(crate) fn push_instanceof_result(&mut self, fact: Option<InstanceOfFact>) {
-        let mut value = FrameValue::plain(InferredType::Int);
+        let mut value = FrameValue::plain(InferredType::Integral(IntegralTypeSet::BOOLEAN));
         value.instanceof_fact = fact;
         self.push_value(value);
     }
@@ -395,11 +395,9 @@ pub(crate) fn inferred_from_descriptor(descriptor: &TypeDescriptor) -> InferredT
             crate::PrimitiveType::Long => InferredType::Long,
             crate::PrimitiveType::Float => InferredType::Float,
             crate::PrimitiveType::Double => InferredType::Double,
-            crate::PrimitiveType::Boolean
-            | crate::PrimitiveType::Byte
-            | crate::PrimitiveType::Char
-            | crate::PrimitiveType::Short
-            | crate::PrimitiveType::Int => InferredType::Int,
+            primitive => IntegralTypeSet::from_primitive(*primitive)
+                .map(InferredType::from_integral_types)
+                .expect("non-floating primitives must use the integral JVM category"),
         },
         TypeDescriptor::Reference(class_name) => {
             InferredType::Reference(ReferenceType::Exact(class_name.clone()))

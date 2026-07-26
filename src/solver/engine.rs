@@ -240,6 +240,7 @@ fn known_nullness(value: InferredType) -> Option<bool> {
         | InferredType::UninitializedThis { .. } => Some(false),
         InferredType::Bottom
         | InferredType::Int
+        | InferredType::Integral(_)
         | InferredType::Float
         | InferredType::Long
         | InferredType::Double
@@ -607,13 +608,12 @@ fn return_opcode_matches_descriptor(opcode: u8, descriptor: &TypeDescriptor) -> 
 }
 
 fn return_value_matches_opcode(opcode: u8, value: &InferredType) -> bool {
-    matches!(
-        (opcode, value),
-        (0xac, InferredType::Int)
-            | (0xad, InferredType::Long)
-            | (0xae, InferredType::Float)
-            | (0xaf, InferredType::Double)
-    ) || (opcode == 0xb0 && reference_value(value))
+    (opcode == 0xac && value.integral_types().is_some())
+        || matches!(
+            (opcode, value),
+            (0xad, InferredType::Long) | (0xae, InferredType::Float) | (0xaf, InferredType::Double)
+        )
+        || (opcode == 0xb0 && reference_value(value))
 }
 
 fn reference_value(value: &InferredType) -> bool {
