@@ -17,6 +17,7 @@ pub(crate) fn analyze_classes(
     let callers = batch_summary_callers(classes);
     let targets = BatchCallTargets::from_classes(classes);
     let mut summaries = MethodSummaries::new();
+    let mut returned_parameters = HashMap::new();
     let mut analyses = (0..classes.len())
         .map(|_| None)
         .collect::<Vec<Option<ClassInference>>>();
@@ -39,11 +40,13 @@ pub(crate) fn analyze_classes(
         let resolver = BatchSummaryResolver {
             external: config.method_summaries(),
             summaries: &summaries,
+            returned_parameters: &returned_parameters,
             targets: &targets,
             current_owner: &class.name,
         };
         let inference = analyze_class_with_method_summaries(class, config, Some(&resolver))?;
-        let changed = update_batch_method_summaries(&mut summaries, &inference);
+        let changed =
+            update_batch_method_summaries(&mut summaries, &mut returned_parameters, &inference);
         analyses[class_index] = Some(inference);
 
         for key in changed {
@@ -86,6 +89,7 @@ pub(crate) fn analyze_classes(
 struct BatchSummaryResolver<'a> {
     external: Option<&'a dyn MethodSummaryResolver>,
     summaries: &'a MethodSummaries,
+    returned_parameters: &'a HashMap<BatchMethodKey, usize>,
     targets: &'a BatchCallTargets,
     current_owner: &'a ClassName,
 }
@@ -167,10 +171,69 @@ impl MethodSummaryResolver for BatchSummaryResolver<'_> {
                 )
             })
     }
+
+    fn returned_parameter_index_for_invocation(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+    ) -> Option<usize> {
+        self.returned_parameter_index_for_call(owner, name, descriptor, invocation_kind, false)
+    }
+
+    fn returned_parameter_index_for_call(
+        &self,
+        owner: &ClassName,
+        name: &str,
+        descriptor: &MethodDescriptor,
+        invocation_kind: MethodInvocationKind,
+        receiver_is_exact_allocation: bool,
+    ) -> Option<usize> {
+        if let Some(resolver) = self.external {
+            let index = resolver.returned_parameter_index_for_call(
+                owner,
+                name,
+                descriptor,
+                invocation_kind,
+                receiver_is_exact_allocation,
+            );
+            if index.is_some()
+                || resolver
+                    .return_type_for_call(
+                        owner,
+                        name,
+                        descriptor,
+                        invocation_kind,
+                        receiver_is_exact_allocation,
+                    )
+                    .is_some()
+            {
+                return index;
+            }
+        }
+        self.batch_return_type(
+            owner,
+            name,
+            descriptor,
+            invocation_kind,
+            receiver_is_exact_allocation,
+        )?;
+        self.returned_parameters
+            .get(&BatchMethodKey {
+                owner: owner.clone(),
+                method: MethodKey {
+                    name: name.to_owned(),
+                    descriptor: descriptor.clone(),
+                },
+            })
+            .copied()
+    }
 }
 
 fn update_batch_method_summaries(
     summaries: &mut MethodSummaries,
+    returned_parameters: &mut HashMap<BatchMethodKey, usize>,
     inference: &ClassInference,
 ) -> Vec<BatchMethodKey> {
     let mut changed = Vec::new();
@@ -184,7 +247,19 @@ fn update_batch_method_summaries(
         };
         let previous = summaries.return_type(&key.owner, &key.method.name, &key.method.descriptor);
         let next = method.inferred_return_type().cloned();
-        if previous == next {
+        let parameter_index = method.returned_parameter_index();
+        let parameter_changed = returned_parameters.get(&key).copied() != parameter_index;
+        if parameter_changed {
+            match parameter_index {
+                Some(index) => {
+                    returned_parameters.insert(key.clone(), index);
+                }
+                None => {
+                    returned_parameters.remove(&key);
+                }
+            }
+        }
+        if previous == next && !parameter_changed {
             continue;
         }
         match next {

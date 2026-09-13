@@ -312,7 +312,9 @@ impl Inferer {
     /// class's converged return summary. Virtual calls do the same only for a
     /// `final` class, a `final` method, or a fresh allocation of the member
     /// owner. Calls without a uniquely provable target keep their
-    /// descriptor-derived return type.
+    /// descriptor-derived return type. Proven returned-parameter relations also
+    /// propagate across deterministic calls, preserving argument types through
+    /// chains of wrapper methods without an external runtime hierarchy.
     pub fn infer_classes<I, B>(&self, class_files: I) -> Result<ClassInferences, Error>
     where
         I: IntoIterator<Item = B>,
