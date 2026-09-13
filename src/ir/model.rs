@@ -92,6 +92,11 @@ pub(crate) enum ConstantKind {
 
 #[derive(Debug, Clone)]
 pub(crate) enum MemberRefIr {
+    ArrayMethod {
+        owner: TypeDescriptor,
+        name: String,
+        descriptor: String,
+    },
     Resolved {
         owner: ClassName,
         name: String,

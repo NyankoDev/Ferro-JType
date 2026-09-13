@@ -64,6 +64,18 @@ pub(super) fn invoke_member(
 
     let receiver = (instruction.opcode != op::INVOKESTATIC)
         .then(|| pop_value(frame, method, instruction, diagnostics));
+    if let Some(MemberRefIr::ArrayMethod { owner, name, .. }) = member {
+        let return_type = (instruction.opcode == op::INVOKEVIRTUAL
+            && name == "clone"
+            && descriptor.parameters().is_empty()
+            && descriptor.return_type()
+                == &ReturnType::Type(TypeDescriptor::Reference(
+                    crate::ClassName::java_lang_object(),
+                )))
+            .then(|| InferredType::Reference(ReferenceType::Array(owner.clone())));
+        push_return_type(&descriptor, return_type, frame);
+        return;
+    }
     if let (Some(MemberRefIr::Resolved { name, owner, .. }), Some(receiver)) = (member, &receiver)
         && name == "<init>"
     {
@@ -144,7 +156,9 @@ fn method_call_descriptor<'a>(
         InstructionOperandIr::InvokeInterface { method, .. } => method,
         _ => return None,
     };
-    let MemberRefIr::Resolved { descriptor, .. } = member else {
+    let (MemberRefIr::Resolved { descriptor, .. } | MemberRefIr::ArrayMethod { descriptor, .. }) =
+        member
+    else {
         unsupported(method, instruction, diagnostics);
         return None;
     };

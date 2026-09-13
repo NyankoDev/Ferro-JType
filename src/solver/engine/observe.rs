@@ -102,6 +102,26 @@ fn invocation_expectations(
     instruction: &InstructionIr,
     stack_depth: usize,
 ) -> Vec<OperandExpectation> {
+    if let InstructionOperandIr::Member(crate::ir::MemberRefIr::ArrayMethod {
+        owner,
+        descriptor,
+        ..
+    }) = &instruction.operand
+    {
+        let Ok(descriptor) = crate::MethodDescriptor::parse(descriptor) else {
+            return Vec::new();
+        };
+        let constraints = std::iter::once(OperandConstraint::Descriptor(owner.clone()))
+            .chain(
+                descriptor
+                    .parameters()
+                    .iter()
+                    .cloned()
+                    .map(OperandConstraint::Descriptor),
+            )
+            .collect();
+        return stack_expectations(stack_depth, constraints);
+    }
     let Some((owner, descriptor)) = resolved_member_reference(instruction) else {
         return Vec::new();
     };

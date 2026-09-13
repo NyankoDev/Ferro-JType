@@ -334,11 +334,7 @@ fn lower_member_reference(
             owner,
             name,
             descriptor,
-        } => Ok(MemberRefIr::Resolved {
-            owner: parse_class_name(owner)?,
-            name: name.to_owned(),
-            descriptor: descriptor.to_owned(),
-        }),
+        } => lower_symbolic_member(owner, name.to_owned(), descriptor.to_owned()),
     }
 }
 
@@ -348,7 +344,7 @@ fn resolve_member_reference(class: &Class, index: ConstantPoolIndex) -> MemberRe
             constant_pool_index: index.get(),
         };
     };
-    let Some(owner) = resolve_class_name(class, class_index) else {
+    let Some(owner) = resolve_class_name_text(class, class_index) else {
         return MemberRefIr::Unresolved {
             constant_pool_index: index.get(),
         };
@@ -359,10 +355,28 @@ fn resolve_member_reference(class: &Class, index: ConstantPoolIndex) -> MemberRe
         };
     };
 
-    MemberRefIr::Resolved {
-        owner,
-        name,
-        descriptor,
+    lower_symbolic_member(&owner, name, descriptor).unwrap_or(MemberRefIr::Unresolved {
+        constant_pool_index: index.get(),
+    })
+}
+
+fn lower_symbolic_member(
+    owner: &str,
+    name: String,
+    descriptor: String,
+) -> Result<MemberRefIr, Error> {
+    if owner.starts_with('[') {
+        Ok(MemberRefIr::ArrayMethod {
+            owner: TypeDescriptor::parse(owner)?,
+            name,
+            descriptor,
+        })
+    } else {
+        Ok(MemberRefIr::Resolved {
+            owner: parse_class_name(owner)?,
+            name,
+            descriptor,
+        })
     }
 }
 
@@ -402,10 +416,6 @@ fn resolve_name_and_type(class: &Class, index: ConstantPoolIndex) -> Option<(Str
         resolve_utf8(class, name)?.to_owned(),
         resolve_utf8(class, descriptor)?.to_owned(),
     ))
-}
-
-fn resolve_class_name(class: &Class, index: ConstantPoolIndex) -> Option<ClassName> {
-    ClassName::parse(resolve_class_name_text(class, index)?).ok()
 }
 
 fn resolve_class_name_text(class: &Class, index: ConstantPoolIndex) -> Option<String> {
