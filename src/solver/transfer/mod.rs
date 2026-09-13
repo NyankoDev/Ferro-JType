@@ -201,12 +201,16 @@ pub(crate) fn transfer(
             instruction,
             diagnostics,
         ),
-        op::L2F | op::F2L | op::D2L => {
-            convert(frame, InferredType::Long, method, instruction, diagnostics)
-        }
-        op::L2D | op::F2D | op::D2F => {
-            convert(frame, InferredType::Float, method, instruction, diagnostics)
-        }
+        op::L2F => convert(frame, InferredType::Float, method, instruction, diagnostics),
+        op::F2L | op::D2L => convert(frame, InferredType::Long, method, instruction, diagnostics),
+        op::L2D | op::F2D => convert(
+            frame,
+            InferredType::Double,
+            method,
+            instruction,
+            diagnostics,
+        ),
+        op::D2F => convert(frame, InferredType::Float, method, instruction, diagnostics),
         op::LCMP..=op::DCMPG => binary(frame, InferredType::Int, method, instruction, diagnostics),
         op::IFEQ..=op::IFLE | op::IFNULL | op::IFNONNULL => {
             discard(frame, method, instruction, diagnostics)
