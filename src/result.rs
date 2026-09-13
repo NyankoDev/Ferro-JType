@@ -258,7 +258,7 @@ pub struct InstructionInference {
     bytecode_offset: u16,
     dynamic_call_kind: Option<DynamicCallKind>,
     operand_expectations: Vec<OperandExpectation>,
-    local_types: Vec<InferredType>,
+    local_types: std::sync::Arc<[InferredType]>,
     stack_before: Vec<InferredType>,
     stack_after: Vec<InferredType>,
 }
@@ -268,7 +268,7 @@ impl InstructionInference {
         bytecode_offset: u16,
         dynamic_call_kind: Option<DynamicCallKind>,
         operand_expectations: Vec<OperandExpectation>,
-        local_types: Vec<InferredType>,
+        local_types: std::sync::Arc<[InferredType]>,
         stack_before: Vec<InferredType>,
         stack_after: Vec<InferredType>,
     ) -> Self {

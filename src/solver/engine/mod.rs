@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::cfg::build_cfg;
 use crate::ir::MethodIr;
@@ -21,7 +18,7 @@ use observe::{
     observe_final_frames,
 };
 use propagate::{
-    BranchFact, Propagation, branch_edge_is_feasible, branch_fact, instanceof_true_edge,
+    BranchFact, Propagation, Worklist, branch_edge_is_feasible, branch_fact, instanceof_true_edge,
     instruction_may_throw, limit_diagnostic, merge_frame, propagate_exception_edges,
     propagate_subroutine_return,
 };
@@ -77,12 +74,12 @@ pub(super) fn analyze_method(
     };
 
     let mut incoming = HashMap::from([(entry, entry_frame.clone())]);
-    let mut worklist = VecDeque::from([entry]);
+    let mut worklist = Worklist::new(entry);
     let mut visits = HashMap::new();
     let mut total_work_items = 0_usize;
     let mut analysis_complete = true;
 
-    while let Some(block_id) = worklist.pop_front() {
+    while let Some(block_id) = worklist.pop() {
         total_work_items += 1;
         if !config.unbounded_analysis() && total_work_items > config.max_work_items() {
             diagnostics.push(limit_diagnostic(method, "work-item budget"));
@@ -102,8 +99,10 @@ pub(super) fn analyze_method(
         let mut frame = incoming[&block_id].clone();
         let mut terminator_branch_fact = None;
         for instruction in &method.instructions[block.instruction_range.clone()] {
-            let before = frame.clone();
-            terminator_branch_fact = branch_fact(instruction.opcode, &before);
+            terminator_branch_fact = branch_fact(instruction.opcode, &frame);
+            let exception_frame = (!block.exception_successors.is_empty()
+                && instruction_may_throw(instruction.opcode))
+            .then(|| frame.clone());
             transfer(
                 method,
                 instruction,
@@ -112,7 +111,7 @@ pub(super) fn analyze_method(
                 method_summaries,
                 field_summaries,
             );
-            if instruction_may_throw(instruction.opcode) {
+            if let Some(before) = exception_frame {
                 let mut propagation =
                     Propagation::new(method, &mut diagnostics, &mut worklist, hierarchy);
                 propagate_exception_edges(

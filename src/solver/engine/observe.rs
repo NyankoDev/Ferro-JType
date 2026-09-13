@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use crate::cfg::{BlockId, ControlFlowGraph};
 use crate::ir::{InstructionIr, InstructionOperandIr, MethodIr};
@@ -21,6 +22,7 @@ pub(super) fn observe_final_frames(
     let mut observations = BTreeMap::new();
     let mut return_origins = BTreeMap::new();
     let mut ignored_diagnostics = Vec::new();
+    let mut local_types: Arc<[InferredType]> = Arc::default();
 
     for (block_id, block) in graph.blocks.iter() {
         let Some(entry_frame) = incoming.get(&block_id) else {
@@ -29,11 +31,15 @@ pub(super) fn observe_final_frames(
         let mut frame = entry_frame.clone();
 
         for instruction in &method.instructions[block.instruction_range.clone()] {
-            let before = frame.clone();
+            let locals = frame.local_types_at(instruction.offset);
+            if locals.as_slice() != local_types.as_ref() {
+                local_types = Arc::from(locals);
+            }
+            let stack_before = frame.stack.clone();
             if matches!(instruction.opcode, op::IRETURN..=op::ARETURN) {
                 return_origins.insert(
                     instruction.offset,
-                    before.top_value().and_then(|value| value.local_origin),
+                    frame.top_value().and_then(|value| value.local_origin),
                 );
             }
             transfer(
@@ -49,9 +55,9 @@ pub(super) fn observe_final_frames(
                 InstructionInference::new(
                     instruction.offset,
                     dynamic_call_kind(instruction),
-                    operand_expectations(method, instruction, &before.stack),
-                    before.local_types_at(instruction.offset),
-                    before.stack,
+                    operand_expectations(method, instruction, &stack_before),
+                    Arc::clone(&local_types),
+                    stack_before,
                     frame.stack.clone(),
                 ),
             );

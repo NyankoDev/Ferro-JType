@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::cfg::{BlockId, ControlFlowGraph, EdgeKind, ExceptionEdge};
 use crate::ir::{InstructionIr, InstructionOperandIr, MethodIr};
@@ -83,10 +83,36 @@ pub(super) const fn instanceof_true_edge(opcode: u8, edge_kind: &EdgeKind) -> bo
     )
 }
 
+pub(super) struct Worklist {
+    queue: VecDeque<BlockId>,
+    queued: HashSet<BlockId>,
+}
+
+impl Worklist {
+    pub(super) fn new(entry: BlockId) -> Self {
+        Self {
+            queue: VecDeque::from([entry]),
+            queued: HashSet::from([entry]),
+        }
+    }
+
+    pub(super) fn pop(&mut self) -> Option<BlockId> {
+        let block = self.queue.pop_front()?;
+        self.queued.remove(&block);
+        Some(block)
+    }
+
+    fn enqueue(&mut self, block: BlockId) {
+        if self.queued.insert(block) {
+            self.queue.push_back(block);
+        }
+    }
+}
+
 pub(super) struct Propagation<'a> {
     method: &'a MethodIr,
     diagnostics: &'a mut Vec<Diagnostic>,
-    worklist: &'a mut VecDeque<BlockId>,
+    worklist: &'a mut Worklist,
     hierarchy: Option<&'a dyn TypeHierarchy>,
 }
 
@@ -94,7 +120,7 @@ impl<'a> Propagation<'a> {
     pub(super) fn new(
         method: &'a MethodIr,
         diagnostics: &'a mut Vec<Diagnostic>,
-        worklist: &'a mut VecDeque<BlockId>,
+        worklist: &'a mut Worklist,
         hierarchy: Option<&'a dyn TypeHierarchy>,
     ) -> Self {
         Self {
@@ -106,7 +132,7 @@ impl<'a> Propagation<'a> {
     }
 
     pub(super) fn enqueue(&mut self, block_id: BlockId) {
-        self.worklist.push_back(block_id);
+        self.worklist.enqueue(block_id);
     }
 }
 
