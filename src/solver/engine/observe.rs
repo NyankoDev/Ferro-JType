@@ -77,7 +77,7 @@ fn operand_expectations(
 ) -> Vec<OperandExpectation> {
     match instruction.opcode {
         op::PUTSTATIC | op::PUTFIELD => field_put_expectations(instruction, stack_before.len()),
-        op::INVOKEVIRTUAL..=op::INVOKEINTERFACE => {
+        op::INVOKEVIRTUAL..=op::INVOKEDYNAMIC => {
             invocation_expectations(instruction, stack_before.len())
         }
         op::IRETURN..=op::ARETURN => return_expectations(method, stack_before.len()),
@@ -108,46 +108,42 @@ fn invocation_expectations(
     instruction: &InstructionIr,
     stack_depth: usize,
 ) -> Vec<OperandExpectation> {
-    if let InstructionOperandIr::Member(crate::ir::MemberRefIr::ArrayMethod {
-        owner,
-        descriptor,
-        ..
-    }) = &instruction.operand
-    {
-        let Ok(descriptor) = crate::MethodDescriptor::parse(descriptor) else {
-            return Vec::new();
-        };
-        let constraints = std::iter::once(OperandConstraint::Descriptor(owner.clone()))
-            .chain(
-                descriptor
-                    .parameters()
-                    .iter()
-                    .cloned()
-                    .map(OperandConstraint::Descriptor),
-            )
-            .collect();
-        return stack_expectations(stack_depth, constraints);
-    }
-    let Some((owner, descriptor)) = resolved_member_reference(instruction) else {
-        return Vec::new();
+    let (receiver, descriptor) = match &instruction.operand {
+        InstructionOperandIr::InvokeDynamic {
+            descriptor: Some(descriptor),
+            ..
+        } => (None, descriptor.as_str()),
+        InstructionOperandIr::Member(crate::ir::MemberRefIr::ArrayMethod {
+            owner,
+            descriptor,
+            ..
+        }) => (
+            Some(OperandConstraint::Descriptor(owner.clone())),
+            descriptor.as_str(),
+        ),
+        _ => {
+            let Some((owner, descriptor)) = resolved_member_reference(instruction) else {
+                return Vec::new();
+            };
+            let receiver = (instruction.opcode != op::INVOKESTATIC)
+                .then(|| OperandConstraint::ReceiverAssignableTo(owner.clone()));
+            (receiver, descriptor)
+        }
     };
     let Ok(descriptor) = crate::MethodDescriptor::parse(descriptor) else {
         return Vec::new();
     };
 
-    let mut constraints = Vec::with_capacity(
-        descriptor.parameters().len() + usize::from(instruction.opcode != op::INVOKESTATIC),
-    );
-    if instruction.opcode != op::INVOKESTATIC {
-        constraints.push(OperandConstraint::ReceiverAssignableTo(owner.clone()));
-    }
-    constraints.extend(
-        descriptor
-            .parameters()
-            .iter()
-            .cloned()
-            .map(OperandConstraint::Descriptor),
-    );
+    let constraints = receiver
+        .into_iter()
+        .chain(
+            descriptor
+                .parameters()
+                .iter()
+                .cloned()
+                .map(OperandConstraint::Descriptor),
+        )
+        .collect();
     stack_expectations(stack_depth, constraints)
 }
 

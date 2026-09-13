@@ -297,9 +297,10 @@ impl InstructionInference {
     /// Returns verifier-derived requirements for operands consumed by this instruction.
     ///
     /// Each expectation names an index into [`Self::stack_before`]. The index
-    /// uses that slice's bottom-to-top order. Expectations are reported only
-    /// when a resolved member reference and a complete operand stack are both
-    /// available; they do not alter the observed inferred types.
+    /// uses that slice's bottom-to-top order. Member calls, `invokedynamic`,
+    /// field stores, and value returns report constraints when their descriptors
+    /// and a complete operand stack are available. This does not execute a
+    /// bootstrap method or alter the observed inferred types.
     #[must_use]
     pub fn operand_expectations(&self) -> &[OperandExpectation] {
         &self.operand_expectations
