@@ -223,14 +223,20 @@ impl MethodSummaryResolver for ClassSummaryResolver<'_> {
         descriptor: &MethodDescriptor,
         invocation_kind: MethodInvocationKind,
     ) -> Option<usize> {
-        if self
-            .external
-            .and_then(|resolver| {
-                resolver.return_type_for_invocation(owner, name, descriptor, invocation_kind)
-            })
-            .is_some()
-        {
-            return None;
+        if let Some(resolver) = self.external {
+            let index = resolver.returned_parameter_index_for_invocation(
+                owner,
+                name,
+                descriptor,
+                invocation_kind,
+            );
+            if index.is_some()
+                || resolver
+                    .return_type_for_invocation(owner, name, descriptor, invocation_kind)
+                    .is_some()
+            {
+                return index;
+            }
         }
         local_call_is_deterministic(
             self.local_calls,
@@ -259,20 +265,27 @@ impl MethodSummaryResolver for ClassSummaryResolver<'_> {
         invocation_kind: MethodInvocationKind,
         receiver_is_exact_allocation: bool,
     ) -> Option<usize> {
-        if self
-            .external
-            .and_then(|resolver| {
-                resolver.return_type_for_call(
-                    owner,
-                    name,
-                    descriptor,
-                    invocation_kind,
-                    receiver_is_exact_allocation,
-                )
-            })
-            .is_some()
-        {
-            return None;
+        if let Some(resolver) = self.external {
+            let index = resolver.returned_parameter_index_for_call(
+                owner,
+                name,
+                descriptor,
+                invocation_kind,
+                receiver_is_exact_allocation,
+            );
+            if index.is_some()
+                || resolver
+                    .return_type_for_call(
+                        owner,
+                        name,
+                        descriptor,
+                        invocation_kind,
+                        receiver_is_exact_allocation,
+                    )
+                    .is_some()
+            {
+                return index;
+            }
         }
         local_call_is_deterministic(
             self.local_calls,

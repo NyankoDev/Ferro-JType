@@ -7,7 +7,7 @@ use crate::{
 };
 use rust_asm::opcodes as op;
 
-use super::{discard, pop, pop_value, unsupported};
+use super::{discard, pop_value, unsupported};
 
 pub(super) fn field_get(
     instruction: &InstructionIr,
@@ -58,7 +58,7 @@ pub(super) fn invoke_member(
     let mut arguments = descriptor
         .parameters()
         .iter()
-        .map(|_| pop(frame, method, instruction, diagnostics))
+        .map(|_| pop_value(frame, method, instruction, diagnostics))
         .collect::<Vec<_>>();
     arguments.reverse();
 
@@ -91,7 +91,8 @@ pub(super) fn invoke_member(
     }
 
     let invocation_kind = MethodInvocationKind::from_opcode(instruction.opcode);
-    let receiver_is_exact_allocation = receiver_is_exact_allocation(member, receiver.as_ref());
+    let receiver_is_exact_allocation =
+        receiver_is_exact_allocation(method, member, receiver.as_ref());
     let summary_return_type = invocation_kind.and_then(|invocation_kind| {
         member.and_then(|member| {
             resolve_method_summary(
@@ -112,14 +113,15 @@ pub(super) fn invoke_member(
                 invocation_kind,
                 &arguments,
                 receiver_is_exact_allocation,
+                summary_return_type.as_ref(),
             )
         })
     });
-    push_return_type(
-        &descriptor,
-        parameter_return_type.or(summary_return_type),
-        frame,
-    );
+    if let Some(value) = parameter_return_type {
+        frame.push_value(value);
+    } else {
+        push_return_type(&descriptor, summary_return_type, frame);
+    }
 }
 
 pub(super) fn invoke_dynamic(
@@ -197,9 +199,10 @@ fn resolve_returned_parameter(
     descriptor: &MethodDescriptor,
     method_summaries: Option<&dyn MethodSummaryResolver>,
     invocation_kind: MethodInvocationKind,
-    arguments: &[InferredType],
+    arguments: &[FrameValue],
     receiver_is_exact_allocation: bool,
-) -> Option<InferredType> {
+    summary_return_type: Option<&InferredType>,
+) -> Option<FrameValue> {
     let MemberRefIr::Resolved { owner, name, .. } = member else {
         return None;
     };
@@ -210,8 +213,15 @@ fn resolve_returned_parameter(
         invocation_kind,
         receiver_is_exact_allocation,
     )?;
-    let return_type = arguments.get(parameter_index)?.clone();
-    method_summary_is_compatible(descriptor, &return_type).then_some(return_type)
+    let parameter = descriptor.parameters().get(parameter_index)?;
+    let mut value = arguments.get(parameter_index)?.clone();
+    if let Some(summary) = summary_return_type
+        && summary != &inferred_from_descriptor(parameter)
+        && !matches!(value.value, InferredType::Reference(ReferenceType::Null))
+    {
+        value.value = summary.clone();
+    }
+    method_summary_is_compatible(descriptor, &value.value).then_some(value)
 }
 
 fn method_summary_is_compatible(descriptor: &MethodDescriptor, return_type: &InferredType) -> bool {
@@ -261,18 +271,33 @@ fn field_type(
 }
 
 fn receiver_is_exact_allocation(
+    method: &MethodIr,
     member: Option<&MemberRefIr>,
     receiver: Option<&FrameValue>,
 ) -> bool {
     let Some(MemberRefIr::Resolved { owner, .. }) = member else {
         return false;
     };
-    matches!(
-        receiver,
-        Some(FrameValue {
-            value: InferredType::Reference(ReferenceType::Exact(class_name)),
-            local_origin: Some(ValueOrigin::Allocation { .. }),
-            ..
-        }) if class_name == owner
-    )
+    let Some(FrameValue {
+        value: InferredType::Reference(ReferenceType::Exact(class_name)),
+        local_origin: Some(ValueOrigin::Allocation { offset }),
+        ..
+    }) = receiver
+    else {
+        return false;
+    };
+    if class_name != owner {
+        return false;
+    }
+    let Ok(index) = method
+        .instructions
+        .binary_search_by_key(offset, |instruction| instruction.offset)
+    else {
+        return false;
+    };
+    matches!(&method.instructions[index], InstructionIr {
+        opcode: op::NEW,
+        operand: InstructionOperandIr::Type { type_name: Some(allocated), .. },
+        ..
+    } if allocated == owner.as_str())
 }
