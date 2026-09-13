@@ -56,6 +56,15 @@ pub enum DescriptorError {
 /// Error returned when a class file cannot be analyzed.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// A caller-supplied reference archive or one of its class entries could not be read.
+    #[error("failed to read reference library entry `{entry}`: {source}")]
+    ReferenceLibrary {
+        /// Archive path or entry name that failed.
+        entry: String,
+        /// Underlying archive, I/O, or class-header error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// The supplied bytes could not be decoded as a Java class file.
     #[error("failed to decode class file: {0}")]
     Decode(#[from] ferro_babe::FerroBabeError),

@@ -2,13 +2,58 @@ use std::ops::Range;
 
 use crate::Error;
 
-pub(super) type Utf8Entries = Vec<Option<Range<usize>>>;
+pub(super) struct Utf8Entries {
+    strings: Vec<Option<Range<usize>>>,
+    classes: Vec<Option<u16>>,
+}
+
+pub(crate) fn class_header_bytes(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut reader = ClassReader::new(bytes);
+    reader.skip(8)?;
+    let constant_pool_count = usize::from(reader.read_u16()?);
+    let names = read_constant_pool(&mut reader, constant_pool_count)?;
+    reader.skip(2)?;
+    let mut classes = vec![reader.read_u16()?, reader.read_u16()?];
+    let interfaces = usize::from(reader.read_u16()?);
+    for _ in 0..interfaces {
+        classes.push(reader.read_u16()?);
+    }
+    let required = classes
+        .into_iter()
+        .filter(|index| *index != 0)
+        .map(|index| {
+            names
+                .classes
+                .get(usize::from(index))
+                .copied()
+                .flatten()
+                .ok_or_else(|| invalid_class_file("invalid hierarchy class constant"))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    let mut header = Vec::new();
+    let mut copied = 0;
+    for (index, range) in names.strings.iter().enumerate() {
+        if let Some(range) = range
+            && !required.contains(&(index as u16))
+        {
+            header.extend_from_slice(&bytes[copied..range.start - 2]);
+            header.extend_from_slice(&[0, 0]);
+            copied = range.end;
+        }
+    }
+    header.extend_from_slice(&bytes[copied..reader.position()]);
+    header.extend_from_slice(&[0; 6]);
+    Ok(header)
+}
 
 pub(super) fn read_constant_pool(
     reader: &mut ClassReader<'_>,
     constant_pool_count: usize,
 ) -> Result<Utf8Entries, Error> {
-    let mut names = vec![None; constant_pool_count];
+    let mut names = Utf8Entries {
+        strings: vec![None; constant_pool_count],
+        classes: vec![None; constant_pool_count],
+    };
     let mut index = 1;
 
     while index < constant_pool_count {
@@ -17,14 +62,15 @@ pub(super) fn read_constant_pool(
                 let length = usize::from(reader.read_u16()?);
                 let start = reader.position();
                 reader.skip(length)?;
-                names[index] = Some(start..reader.position());
+                names.strings[index] = Some(start..reader.position());
             }
             3 | 4 => reader.skip(4)?,
             5 | 6 => {
                 reader.skip(8)?;
                 index += 1;
             }
-            7 | 8 | 16 | 19 | 20 => reader.skip(2)?,
+            7 => names.classes[index] = Some(reader.read_u16()?),
+            8 | 16 | 19 | 20 => reader.skip(2)?,
             9 | 10 | 11 | 12 | 17 | 18 => reader.skip(4)?,
             15 => reader.skip(3)?,
             tag => {
@@ -45,6 +91,7 @@ pub(super) fn attribute_name<'a>(
     index: u16,
 ) -> Option<&'a [u8]> {
     names
+        .strings
         .get(usize::from(index))?
         .as_ref()
         .map(|range| &bytes[range.clone()])

@@ -198,6 +198,9 @@ impl InferenceConfig {
     ///
     /// The supplied hierarchy is consulted only during type merges. It never
     /// causes the inferer to load classes or execute Java code.
+    /// Use [`crate::ClassHierarchy::insert_jar`] or
+    /// [`crate::ClassHierarchy::insert_jar_file`] to index reference libraries,
+    /// including `rt.jar` and classes exported from `jrt:/`.
     #[must_use]
     pub fn with_shared_type_hierarchy(mut self, hierarchy: Arc<dyn TypeHierarchy>) -> Self {
         self.hierarchy = Some(hierarchy);

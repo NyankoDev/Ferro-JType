@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, VecDeque};
 
 use ferro_babe::{Disassembler, RecoveryMode};
 
-use crate::ir::strip_stack_map_tables;
+use crate::ir::class_header_bytes;
 use crate::{ClassName, DescriptorError, Error};
+
+mod jar;
 
 /// Supplies direct supertypes for optional reference-type refinement.
 ///
@@ -19,8 +21,8 @@ pub trait TypeHierarchy: Send + Sync {
 
 /// An in-memory [`TypeHierarchy`] built solely from caller-supplied class files.
 ///
-/// It does not consult the JDK, a Java runtime, the filesystem, or a class
-/// loader. Add only the classes whose hierarchy should refine inference.
+/// Add class bytes, reference JAR bytes, or explicitly selected JAR files.
+/// It never discovers a JDK or loads or executes Java classes automatically.
 #[derive(Debug, Clone, Default)]
 pub struct ClassHierarchy {
     parents: BTreeMap<ClassName, Vec<ClassName>>,
@@ -35,12 +37,12 @@ impl ClassHierarchy {
 
     /// Decodes and adds one class header from caller-supplied bytes.
     ///
-    /// Returns the class's internal name. A supplied `StackMapTable` is ignored
-    /// exactly as it is for normal inference.
+    /// Returns the class's internal name. Only the constant pool and hierarchy
+    /// header are decoded; method bodies and attributes do not affect indexing.
     pub fn insert_class(&mut self, bytes: &[u8]) -> Result<ClassName, Error> {
-        let bytes = strip_stack_map_tables(bytes)?;
+        let bytes = class_header_bytes(bytes)?;
         let disassembly = Disassembler::builder()
-            .recovery(RecoveryMode::BestEffort)
+            .recovery(RecoveryMode::Strict)
             .build()
             .parse(&bytes)?;
         let class = disassembly.class().ok_or(Error::IncompleteClass)?;
@@ -131,7 +133,10 @@ fn ancestor_distances(
             hierarchy.direct_supertypes(&current).unwrap_or_default()
         };
         for parent in parents {
-            if distances.insert(parent.clone(), distance + 1).is_none() {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                distances.entry(parent.clone())
+            {
+                entry.insert(distance + 1);
                 queue.push_back(parent);
             }
         }

@@ -1,11 +1,39 @@
-use std::{env, fs, path::Path, process::ExitCode};
+use std::{env, fs, path::Path, process::ExitCode, sync::Arc};
 
-use ferro_jtype::infer_class;
+use ferro_jtype::{ClassHierarchy, InferenceConfig, Inferer};
 
 fn main() -> ExitCode {
-    let Some(path) = env::args_os().nth(1) else {
-        eprintln!("usage: cargo run --example infer -- <path-to-class-file>");
+    let mut arguments = env::args_os().skip(1);
+    let Some(path) = arguments.next() else {
+        eprintln!("usage: cargo run --example infer -- <class-file> [--reference <jar>]...");
         return ExitCode::FAILURE;
+    };
+
+    let mut hierarchy = ClassHierarchy::new();
+    while let Some(option) = arguments.next() {
+        if option != "--reference" {
+            eprintln!("unknown option: {}", option.to_string_lossy());
+            return ExitCode::FAILURE;
+        }
+        let Some(reference) = arguments.next() else {
+            eprintln!("--reference requires a JAR path");
+            return ExitCode::FAILURE;
+        };
+        if let Err(error) = hierarchy.insert_jar_file(&reference) {
+            eprintln!("failed to index {}: {error}", reference.to_string_lossy());
+            return ExitCode::FAILURE;
+        }
+    }
+    let mut config = InferenceConfig::default();
+    if !hierarchy.is_empty() {
+        config = config.with_shared_type_hierarchy(Arc::new(hierarchy));
+    }
+    let inferer = match Inferer::new(config) {
+        Ok(inferer) => inferer,
+        Err(error) => {
+            eprintln!("failed to configure inference: {error}");
+            return ExitCode::FAILURE;
+        }
     };
 
     let path = Path::new(&path);
@@ -17,7 +45,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let inference = match infer_class(&bytes) {
+    let inference = match inferer.infer_class(&bytes) {
         Ok(inference) => inference,
         Err(error) => {
             eprintln!("failed to infer {}: {error}", path.display());
