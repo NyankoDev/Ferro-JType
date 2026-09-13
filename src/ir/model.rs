@@ -78,7 +78,7 @@ pub(crate) enum InstructionOperandIr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConstantKind {
-    Integer,
+    Integer(i32),
     Float,
     Long,
     Double,

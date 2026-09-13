@@ -23,8 +23,18 @@ pub(crate) fn transfer(
     match instruction.opcode {
         op::NOP => {}
         op::ACONST_NULL => frame.push(InferredType::Reference(ReferenceType::Null)),
-        op::ICONST_M1..=op::ICONST_5 | op::BIPUSH | op::SIPUSH => {
-            frame.push(InferredType::Integral(IntegralTypeSet::ALL))
+        op::ICONST_M1..=op::ICONST_5 => {
+            push_integer(
+                i32::from(instruction.opcode) - i32::from(op::ICONST_0),
+                frame,
+            );
+        }
+        op::BIPUSH | op::SIPUSH => {
+            if let InstructionOperandIr::Immediate(value) = instruction.operand {
+                push_integer(value, frame);
+            } else {
+                frame.push(InferredType::Integral(IntegralTypeSet::ALL));
+            }
         }
         op::LCONST_0..=op::LCONST_1 => frame.push(InferredType::Long),
         op::FCONST_0..=op::FCONST_2 => frame.push(InferredType::Float),
@@ -165,7 +175,8 @@ pub(crate) fn transfer(
             instruction,
             diagnostics,
         ),
-        op::INEG | op::FNEG | op::DNEG => unary(frame, method, instruction, diagnostics),
+        op::INEG => convert(frame, InferredType::Int, method, instruction, diagnostics),
+        op::FNEG | op::DNEG => unary(frame, method, instruction, diagnostics),
         op::LNEG => unary(frame, method, instruction, diagnostics),
         op::IINC => increment_local(instruction, frame),
         op::I2L => convert(frame, InferredType::Long, method, instruction, diagnostics),
@@ -403,8 +414,8 @@ fn reference_descriptor(name: &str) -> Option<TypeDescriptor> {
 
 fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
     let value = match &instruction.operand {
-        InstructionOperandIr::Constant(ConstantKind::Integer) => {
-            InferredType::Integral(IntegralTypeSet::ALL)
+        InstructionOperandIr::Constant(ConstantKind::Integer(value)) => {
+            InferredType::from_integral_types(IntegralTypeSet::for_constant(*value))
         }
         InstructionOperandIr::Constant(ConstantKind::Float) => InferredType::Float,
         InstructionOperandIr::Constant(ConstantKind::Long) => InferredType::Long,
@@ -430,6 +441,12 @@ fn push_constant(instruction: &InstructionIr, frame: &mut Frame) {
         _ => InferredType::Reference(ReferenceType::Unknown),
     };
     frame.push(value);
+}
+
+fn push_integer(value: i32, frame: &mut Frame) {
+    frame.push(InferredType::from_integral_types(
+        IntegralTypeSet::for_constant(value),
+    ));
 }
 
 fn push_subroutine_return_address(

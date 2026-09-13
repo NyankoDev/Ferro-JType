@@ -434,7 +434,7 @@ fn resolve_utf8(class: &Class, index: ConstantPoolIndex) -> Option<&str> {
 
 fn lower_constant(class: &Class, value: LdcValueRef<'_>) -> ConstantKind {
     match value {
-        LdcValueRef::Integer(_) => ConstantKind::Integer,
+        LdcValueRef::Integer(value) => ConstantKind::Integer(value),
         LdcValueRef::Float(_) => ConstantKind::Float,
         LdcValueRef::Long(_) => ConstantKind::Long,
         LdcValueRef::Double(_) => ConstantKind::Double,
@@ -446,7 +446,7 @@ fn lower_constant(class: &Class, value: LdcValueRef<'_>) -> ConstantKind {
 
 fn lower_constant_pool(class: &Class, index: ConstantPoolIndex) -> ConstantKind {
     match class.constant(index) {
-        Some(ConstantRef::Integer(_)) => ConstantKind::Integer,
+        Some(ConstantRef::Integer(value)) => ConstantKind::Integer(value),
         Some(ConstantRef::Float(_)) => ConstantKind::Float,
         Some(ConstantRef::Long(_)) => ConstantKind::Long,
         Some(ConstantRef::Double(_)) => ConstantKind::Double,

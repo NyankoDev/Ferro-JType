@@ -6,6 +6,8 @@ use crate::PrimitiveType;
 /// `short`, and `int`. This set preserves the narrower information supplied by
 /// descriptors and instructions without inventing a single source type when
 /// the bytecode cannot prove one.
+/// Integer constants retain only types whose value ranges contain the constant;
+/// zero and one remain ambiguous between boolean and numeric uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IntegralTypeSet(u8);
 
@@ -76,5 +78,22 @@ impl IntegralTypeSet {
 
     pub(crate) const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    pub(crate) fn for_constant(value: i32) -> Self {
+        let mut types = Self::INT;
+        if matches!(value, 0 | 1) {
+            types = types.union(Self::BOOLEAN);
+        }
+        if i8::try_from(value).is_ok() {
+            types = types.union(Self::BYTE);
+        }
+        if i16::try_from(value).is_ok() {
+            types = types.union(Self::SHORT);
+        }
+        if u16::try_from(value).is_ok() {
+            types = types.union(Self::CHAR);
+        }
+        types
     }
 }
