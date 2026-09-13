@@ -62,6 +62,13 @@ pub(super) fn reference_array_load(
 }
 
 fn reference_array_element_type(array: &InferredType) -> InferredType {
+    if let InferredType::Alternatives(arrays) = array {
+        return arrays
+            .iter()
+            .map(reference_array_element_type)
+            .reduce(|left, right| left.join(&right))
+            .unwrap_or(InferredType::Reference(ReferenceType::Unknown));
+    }
     let InferredType::Reference(ReferenceType::Array(TypeDescriptor::Array {
         dimensions,
         element,

@@ -97,6 +97,9 @@ pub(crate) fn common_supertype(
     if left == right {
         return Some(left.clone());
     }
+    if left.as_str() == "java/lang/Object" || right.as_str() == "java/lang/Object" {
+        return Some(ClassName::java_lang_object());
+    }
 
     let hierarchy = hierarchy?;
     let left_distances = ancestor_distances(hierarchy, left);

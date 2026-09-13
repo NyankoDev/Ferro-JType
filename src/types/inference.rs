@@ -43,6 +43,14 @@ impl ReferenceType {
             (Self::Exact(left), Self::Exact(right)) => {
                 common_supertype(hierarchy, left, right).map(Self::Exact)
             }
+            (Self::Array(_), Self::Exact(name)) | (Self::Exact(name), Self::Array(_))
+                if matches!(
+                    name.as_str(),
+                    "java/lang/Object" | "java/lang/Cloneable" | "java/io/Serializable"
+                ) =>
+            {
+                Some(Self::Exact(name.clone()))
+            }
             _ => None,
         }
     }
