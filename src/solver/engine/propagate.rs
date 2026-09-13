@@ -44,16 +44,16 @@ pub(super) fn branch_fact(opcode: u8, frame: &Frame) -> Option<BranchFact> {
 fn known_nullness(value: InferredType) -> Option<bool> {
     match value {
         InferredType::Reference(ReferenceType::Null) => Some(true),
-        InferredType::Reference(ReferenceType::Exact(_) | ReferenceType::Array(_))
-        | InferredType::Uninitialized { .. }
-        | InferredType::UninitializedThis { .. } => Some(false),
+        InferredType::Uninitialized { .. } | InferredType::UninitializedThis { .. } => Some(false),
         InferredType::Bottom
         | InferredType::Int
         | InferredType::Integral(_)
         | InferredType::Float
         | InferredType::Long
         | InferredType::Double
-        | InferredType::Reference(ReferenceType::Unknown)
+        | InferredType::Reference(
+            ReferenceType::Exact(_) | ReferenceType::Array(_) | ReferenceType::Unknown,
+        )
         | InferredType::ReturnAddress
         | InferredType::Alternatives(_)
         | InferredType::Conflict => None,
