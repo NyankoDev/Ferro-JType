@@ -179,7 +179,6 @@ pub(super) fn analyze_method(
         &observations.instructions,
         entry_frame.locals,
         method,
-        hierarchy,
     );
     let inferred_return_type = analysis_complete
         .then(|| collect_inferred_return_type(method, &observations.instructions, hierarchy))

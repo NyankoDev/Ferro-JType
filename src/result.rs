@@ -237,6 +237,10 @@ impl MethodInference {
     }
 
     /// Returns inferred local-variable types indexed by JVM local slot.
+    ///
+    /// Aggregates the types observed across the method, including separate
+    /// lifetimes of a reused slot. Distinct reference candidates are retained
+    /// rather than collapsed to a hierarchy-derived common supertype here.
     #[must_use]
     pub fn local_types(&self) -> &[InferredType] {
         &self.local_types
@@ -307,6 +311,9 @@ impl InstructionInference {
     }
 
     /// Returns local-variable types immediately before this instruction.
+    ///
+    /// Values from different or unproven origins retain reference alternatives
+    /// at joins. A reference hierarchy may refine joins of the same proven value.
     #[must_use]
     pub fn local_types(&self) -> &[InferredType] {
         &self.local_types

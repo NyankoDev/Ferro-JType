@@ -324,14 +324,13 @@ pub(super) fn collect_local_types(
     observations: &BTreeMap<u16, InstructionInference>,
     entry_locals: Vec<InferredType>,
     method: &MethodIr,
-    hierarchy: Option<&dyn crate::TypeHierarchy>,
 ) -> Vec<InferredType> {
     let mut locals = entry_locals;
     for frame in incoming.values() {
-        merge_locals(&mut locals, &frame.locals, hierarchy);
+        merge_locals(&mut locals, &frame.locals);
     }
     for observation in observations.values() {
-        merge_locals(&mut locals, observation.local_types(), hierarchy);
+        merge_locals(&mut locals, observation.local_types());
     }
     refine_catch_local_types(&mut locals, incoming, observations, method);
     locals
@@ -431,13 +430,9 @@ fn local_values_are_catch_types(
     saw_catch_value
 }
 
-fn merge_locals(
-    destination: &mut Vec<InferredType>,
-    source: &[InferredType],
-    hierarchy: Option<&dyn crate::TypeHierarchy>,
-) {
+fn merge_locals(destination: &mut Vec<InferredType>, source: &[InferredType]) {
     destination.resize(destination.len().max(source.len()), InferredType::Bottom);
     for (destination, source) in destination.iter_mut().zip(source) {
-        *destination = join_local_types(destination, source, hierarchy);
+        *destination = join_local_types(destination, source, None);
     }
 }

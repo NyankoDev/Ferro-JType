@@ -319,7 +319,14 @@ impl Frame {
         self.local_value_origins.resize(local_count, None);
         for (index, value) in incoming.locals.iter().enumerate() {
             let existing = self.locals[index].clone();
-            let merged = join_local_types(&self.locals[index], value, hierarchy);
+            let origin = self.local_value_origins[index];
+            let incoming_origin = incoming.local_value_origins.get(index).copied().flatten();
+            let same_value = origin.is_some() && origin == incoming_origin;
+            let merged = join_local_types(
+                &self.locals[index],
+                value,
+                if same_value { hierarchy } else { None },
+            );
             self.local_return_targets[index] = merged_return_targets(
                 &existing,
                 self.local_return_targets[index].as_ref(),
@@ -333,9 +340,7 @@ impl Frame {
             if merged != self.locals[index] {
                 self.locals[index] = merged;
             }
-            if self.local_value_origins[index]
-                != incoming.local_value_origins.get(index).copied().flatten()
-            {
+            if origin != incoming_origin {
                 self.local_value_origins[index] = None;
             }
         }
