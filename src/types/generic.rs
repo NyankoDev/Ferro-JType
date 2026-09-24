@@ -44,6 +44,89 @@ impl GenericSignature {
         let ty = parser.parse_type()?;
         (parser.cursor == parser.input.len()).then_some(ty)
     }
+
+    /// Parses a class generic signature.
+    #[must_use]
+    pub fn parse_class(&self) -> Option<GenericClassSignature> {
+        let mut parser = Parser {
+            input: self.0.as_bytes(),
+            cursor: 0,
+        };
+        let parameters = parser.formals()?;
+        let superclass = parser.class_type()?;
+        let mut interfaces = Vec::new();
+        while parser.peek().is_some() {
+            interfaces.push(parser.class_type()?);
+        }
+        Some(GenericClassSignature {
+            parameters,
+            superclass,
+            interfaces,
+        })
+    }
+
+    /// Parses a method generic signature.
+    #[must_use]
+    pub fn parse_method(&self) -> Option<GenericMethodSignature> {
+        let mut parser = Parser {
+            input: self.0.as_bytes(),
+            cursor: 0,
+        };
+        let parameters = parser.formals()?;
+        parser.consume(b'(').then_some(())?;
+        let mut arguments = Vec::new();
+        while !parser.consume(b')') {
+            arguments.push(parser.parse_type()?);
+        }
+        let returns = if parser.consume(b'V') {
+            None
+        } else {
+            Some(parser.parse_type()?)
+        };
+        let mut throws = Vec::new();
+        while parser.consume(b'^') {
+            throws.push(parser.parse_type()?);
+        }
+        (parser.cursor == parser.input.len()).then_some(GenericMethodSignature {
+            parameters,
+            arguments,
+            returns,
+            throws,
+        })
+    }
+}
+
+/// Formal parameters and bounds from a class or method signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GenericParameter {
+    /// Type-variable identifier.
+    pub name: String,
+    /// Explicit upper bounds.
+    pub bounds: Vec<GenericType>,
+}
+
+/// Parsed class generic signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GenericClassSignature {
+    /// Formal type parameters.
+    pub parameters: Vec<GenericParameter>,
+    /// Generic superclass.
+    pub superclass: GenericClassType,
+    /// Generic superinterfaces.
+    pub interfaces: Vec<GenericClassType>,
+}
+
+/// Parsed method generic signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GenericMethodSignature {
+    /// Formal type parameters.
+    pub parameters: Vec<GenericParameter>,
+    /// Generic argument types.
+    pub arguments: Vec<GenericType>,
+    /// Generic result type, or `None` for void.
+    pub returns: Option<GenericType>,
+    /// Declared thrown types.
+    pub throws: Vec<GenericType>,
 }
 
 /// A parsed JVM field type that preserves generic arguments.
@@ -105,6 +188,36 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.input.get(self.cursor).copied()
+    }
+
+    fn class_type(&mut self) -> Option<GenericClassType> {
+        if !self.consume(b'L') {
+            return None;
+        }
+        self.parse_class()
+    }
+
+    fn formals(&mut self) -> Option<Vec<GenericParameter>> {
+        let mut parameters = Vec::new();
+        if !self.consume(b'<') {
+            return Some(parameters);
+        }
+        while !self.consume(b'>') {
+            let name = self.until(b':')?;
+            let mut bounds = Vec::new();
+            if self.peek() != Some(b':') {
+                bounds.push(self.parse_type()?);
+            }
+            while self.consume(b':') {
+                bounds.push(self.parse_type()?);
+            }
+            parameters.push(GenericParameter { name, bounds });
+        }
+        Some(parameters)
+    }
+
     fn parse_type(&mut self) -> Option<GenericType> {
         let tag = self.next()?;
         Some(match tag {

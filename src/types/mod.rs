@@ -10,8 +10,8 @@ pub use class_name::ClassName;
 pub use descriptor::{MethodDescriptor, PrimitiveType, ReturnType, TypeDescriptor};
 pub use dynamic::DynamicCallKind;
 pub use generic::{
-    GenericArgument, GenericClassSegment, GenericClassType, GenericSignature, GenericType,
-    GenericWildcard,
+    GenericArgument, GenericClassSegment, GenericClassSignature, GenericClassType,
+    GenericMethodSignature, GenericParameter, GenericSignature, GenericType, GenericWildcard,
 };
 pub(crate) use inference::join_local_types;
 pub use inference::{InferredType, ReferenceType};
