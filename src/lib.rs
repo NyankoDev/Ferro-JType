@@ -33,6 +33,8 @@ pub use result::{
 };
 pub use summary::{FieldSummaries, FieldSummaryResolver, MethodSummaries, MethodSummaryResolver};
 pub use types::{
-    ClassName, DynamicCallKind, GenericSignature, InferredType, IntegralTypeSet, MethodDescriptor,
-    MethodInvocationKind, PrimitiveType, ReferenceType, ReturnType, TypeDescriptor,
+    ClassName, DynamicCallKind, GenericArgument, GenericClassSegment, GenericClassType,
+    GenericSignature, GenericType, GenericWildcard, InferredType, IntegralTypeSet,
+    MethodDescriptor, MethodInvocationKind, PrimitiveType, ReferenceType, ReturnType,
+    TypeDescriptor,
 };
