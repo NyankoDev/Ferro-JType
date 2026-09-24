@@ -116,7 +116,10 @@ impl Parser<'_> {
             b'F' => GenericType::Primitive(PrimitiveType::Float),
             b'J' => GenericType::Primitive(PrimitiveType::Long),
             b'D' => GenericType::Primitive(PrimitiveType::Double),
-            b'T' => GenericType::Variable(self.until(b';')?),
+            b'T' => {
+                let name = self.until(b';')?;
+                self.consume(b';').then_some(GenericType::Variable(name))?
+            }
             b'[' => GenericType::Array(Box::new(self.parse_type()?)),
             b'L' => GenericType::Class(self.parse_class()?),
             _ => return None,
